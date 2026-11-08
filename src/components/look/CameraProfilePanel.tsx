@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Copy, Download, RotateCcw, Trash2, Upload, Camera, Ban } from 'lucide-react';
 import type { LookState } from '../../types/lut';
 import { cameraProfileStore } from '../../services/cameraProfileStore';
+import { shareTextFile } from '../../services/shareService';
 import type { CameraProfile, BorderStyle, DateFormat, DatePosition } from '../../utils/cameraProfile';
 import { renderProbe, type ProbeSnapshot } from '../../utils/renderProbe';
 
@@ -166,21 +167,26 @@ export const CameraProfilePanel: React.FC<Props> = ({ lookState, onChangeLookSta
     } else setMessage({ kind: 'error', text: 'Could not duplicate (profile limit reached).' });
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!active) return;
     const json = cameraProfileStore.exportJson(active.id);
-    if (!json) return;
-    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${active.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.cinegrid-camera.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setMessage({ kind: 'ok', text: 'Profile exported.' });
+    if (!json) {
+      setMessage({ kind: 'error', text: 'Could not export this camera.' });
+      return;
+    }
+    const fileName = `${active.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.cinegrid-camera.json`;
+    try {
+      // Reports success only after the file was really written and handed to the share sheet.
+      const result = await shareTextFile(fileName, json);
+      setMessage(
+        result === 'shared'
+          ? { kind: 'ok', text: `Choose where to save “${fileName}”.` }
+          : { kind: 'ok', text: 'Export cancelled. Nothing was saved.' }
+      );
+    } catch (err) {
+      setMessage({ kind: 'error', text: `Export failed: ${(err as Error)?.message || 'could not write the file'}.` });
+    }
   };
-
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
