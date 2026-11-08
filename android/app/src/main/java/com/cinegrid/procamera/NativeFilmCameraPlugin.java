@@ -105,6 +105,7 @@ public class NativeFilmCameraPlugin extends Plugin {
             return;
         }
         final boolean front = "front".equals(call.getString("facing", "back"));
+        final float stillRatio = call.getFloat("stillRatio", 4f / 3f);
         final JSObject profile = call.getObject("profile");
 
         getActivity().runOnUiThread(() -> {
@@ -131,7 +132,7 @@ public class NativeFilmCameraPlugin extends Plugin {
 
                 previewView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
                     @Override public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
-                        Session s = new Session(getContext(), new Surface(texture), front, profile, call);
+                        Session s = new Session(getContext(), new Surface(texture), front, profile, call, stillRatio);
                         s.setSurfaceSize(width, height);
                         session = s;
                         s.start();
@@ -432,7 +433,10 @@ public class NativeFilmCameraPlugin extends Plugin {
         private final int[] uniformLoc = new int[uniformNames.length];
         private int frameCounter = 0;
 
-        Session(Context context, Surface outSurface, boolean front, JSObject profileJson, PluginCall call) {
+        private final float stillRatio;
+
+        Session(Context context, Surface outSurface, boolean front, JSObject profileJson, PluginCall call, float stillRatio) {
+            this.stillRatio = stillRatio > 0.9f ? stillRatio : 4f / 3f;
             this.context = context;
             this.outSurface = outSurface;
             this.front = front;
@@ -496,6 +500,11 @@ public class NativeFilmCameraPlugin extends Plugin {
             o.put("surface", surfW + "x" + surfH);
             o.put("sensorOrientation", sensorOrientation);
             o.put("stMatrix", java.util.Arrays.toString(stMatrix));
+            o.put("zoom", zoomRatio);
+            o.put("evStops", evIndex * evStep);
+            o.put("torch", torchOn);
+            o.put("recording", recording);
+            o.put("front", front);
             o.put("aeFpsRange", fpsRange == null ? "default" : fpsRange.getLower() + "-" + fpsRange.getUpper());
             o.put("aeFpsRangesAvailable", allFpsRanges == null ? "" : java.util.Arrays.toString(allFpsRanges));
             synchronized (statsLock) {
@@ -650,7 +659,7 @@ public class NativeFilmCameraPlugin extends Plugin {
                 characteristics = cc;
                 fpsRange = fps;
                 allFpsRanges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-                jpegSize = pickStillSize(map.getOutputSizes(ImageFormat.JPEG));
+                jpegSize = pickStillSize(map.getOutputSizes(ImageFormat.JPEG), stillRatio);
                 if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) != null) evStep = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP).floatValue();
                 if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) != null) evRange = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
 
@@ -919,13 +928,21 @@ public class NativeFilmCameraPlugin extends Plugin {
             }
         }
 
-        /** Largest 4:3 JPEG size (matches the 4:3 frame); else the largest overall. */
-        private static Size pickStillSize(Size[] sizes) {
-            Size best43 = null, best = null;
+        /**
+         * Largest JPEG size whose shape matches the viewfinder frame (long/short = ratio, within 1%), so a 16:9 or 1:1
+         * photo uses the sensor mode of that shape instead of cropping a 4:3 still. Falls back to the largest 4:3 size,
+         * then the largest size overall.
+         */
+        private static Size pickStillSize(Size[] sizes, float ratio) {
+            Size match = null, best43 = null, best = null;
             for (Size s : sizes) {
-                if (best == null || s.getWidth() * s.getHeight() > best.getWidth() * best.getHeight()) best = s;
-                if (s.getWidth() * 3 == s.getHeight() * 4 && (best43 == null || s.getWidth() * s.getHeight() > best43.getWidth() * best43.getHeight())) best43 = s;
+                long px = (long) s.getWidth() * s.getHeight();
+                float r = (float) Math.max(s.getWidth(), s.getHeight()) / Math.min(s.getWidth(), s.getHeight());
+                if (best == null || px > (long) best.getWidth() * best.getHeight()) best = s;
+                if (Math.abs(r - ratio) / ratio < 0.01f && (match == null || px > (long) match.getWidth() * match.getHeight())) match = s;
+                if (s.getWidth() * 3 == s.getHeight() * 4 && (best43 == null || px > (long) best43.getWidth() * best43.getHeight())) best43 = s;
             }
+            if (match != null) return match;
             return best43 != null ? best43 : best;
         }
         /** Largest 4:3 size up to 1920x1440; falls back to the largest size up to 1920x1080. */

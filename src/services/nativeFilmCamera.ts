@@ -72,6 +72,8 @@ export interface NativeFilmStartOptions {
   width: number;
   height: number;
   profile: CameraProfile | null;
+  /** Long/short side ratio of the viewfinder frame: the camera then picks the still size of that shape (16:9, 1:1, ...). */
+  stillRatio?: number;
 }
 
 interface NativeFilmPluginApi {

@@ -102,7 +102,12 @@ export function useNativeFilmCamera(p: Params): NativeFilmState {
       handoffRef.current.release();
       hadNative.current = true;
       try {
-        const started = await nativeFilm.start({ facing: p.front ? 'front' : 'back', ...rect, profile: profileRef.current });
+        const started = await nativeFilm.start({
+          facing: p.front ? 'front' : 'back',
+          ...rect,
+          profile: profileRef.current,
+          stillRatio: Math.max(rect.width / rect.height, rect.height / rect.width),
+        });
         if (cancelled) {
           await nativeFilm.stop().catch(() => {});
           return;
