@@ -1,5 +1,6 @@
 import type { LutDefinition, LookState, ColorAdjustments } from '../types/lut';
 import { resampleLut, maxLutSizeFor } from './lutResample';
+import { type CameraProfile, formatDateImprint, isNeutralProfile } from './cameraProfile';
 
 const VS_SOURCE = `
 attribute vec2 a_position;
@@ -43,7 +44,167 @@ uniform float u_fade;
 uniform float u_compareActive;
 uniform float u_compareSplit;
 
+// Virtual camera film stage (see utils/cameraProfile.ts; the maths here mirrors its CPU reference)
+uniform float u_film;
+uniform vec2 u_res;
+uniform float u_seed;
+uniform mat3 u_fMat;
+uniform vec4 u_fColor;   // saturation, contrast, temperature, tint
+uniform vec4 u_fTone;    // blackPoint, shadowLift, midGamma, highlightRolloff
+uniform vec4 u_fGrain;   // amount, size, roughness, chroma
+uniform float u_fGrainShadow;
+uniform vec4 u_fHal;     // amount, radius, threshold, unused
+uniform vec3 u_fHalColor;
+uniform vec3 u_fBloom;   // amount, radius, threshold
+uniform vec3 u_fVig;     // amount, roundness, softness
+uniform vec3 u_fOptics;  // softness, chromaticAberration, dust
+uniform vec3 u_fLeak;    // amount, hue(0..1), position
+uniform vec2 u_fFlash;   // amount, falloff
+uniform vec2 u_fBorder;  // style (0 none,1 film,2 instant), width
+uniform float u_hasDate;
+uniform vec4 u_dateRect; // x, y, w, h in uv (y=0 is image top)
+uniform vec3 u_dateColor;
+uniform sampler2D u_dateTex;
+
 varying vec2 v_texCoord;
+
+float fHash(vec2 p, float s) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233)) + s * 37.719) * 43758.5453);
+}
+
+vec3 hue2rgb(float h) {
+  return clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+}
+
+float luma709(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+float toneCh(float x) {
+  float y = max(0.0, (x - u_fTone.x) / (1.0 - u_fTone.x));
+  y = pow(y, u_fTone.z);
+  if (u_fTone.w > 0.0) {
+    float knee = 1.0 - 0.6 * u_fTone.w;
+    if (y > knee) {
+      float k = (y - knee) / (1.0 - knee);
+      y = knee + (1.0 - knee) * (k / (1.0 + k));
+    }
+  }
+  return u_fTone.y + y * (1.0 - u_fTone.y);
+}
+
+// Sampling stage: chromatic aberration, lens softness, halation and bloom glow.
+vec3 filmBase(vec2 uv) {
+  vec2 c = uv - 0.5;
+  vec2 texel = 1.0 / u_res;
+  // Radial R/B channel shift, strongest at the corners.
+  vec2 ca = c * (u_fOptics.y * 0.012);
+  vec3 col = vec3(
+    texture2D(u_image, uv + ca).r,
+    texture2D(u_image, uv).g,
+    texture2D(u_image, uv - ca).b);
+
+  // Lens softness: mix toward a 8-tap blur.
+  if (u_fOptics.x > 0.0) {
+    float r = (1.0 + u_fOptics.x * 4.0);
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+      float a = float(i) * 0.785398;
+      acc += texture2D(u_image, uv + vec2(cos(a), sin(a)) * texel * r).rgb;
+    }
+    col = mix(col, acc / 8.0, u_fOptics.x);
+  }
+
+  // Glow: two rings of taps, thresholded. Halation is tinted and wider; bloom is neutral.
+  if (u_fHal.x > 0.0 || u_fBloom.x > 0.0) {
+    float hr = 6.0 + u_fHal.y * 40.0;
+    float br = 4.0 + u_fBloom.y * 30.0;
+    vec3 hAcc = vec3(0.0);
+    vec3 bAcc = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+      float a = float(i) * 0.5236;
+      vec2 d = vec2(cos(a), sin(a)) * texel;
+      hAcc += max(texture2D(u_image, uv + d * hr).rgb - u_fHal.z, 0.0);
+      bAcc += max(texture2D(u_image, uv + d * br * 0.6).rgb - u_fBloom.z, 0.0);
+    }
+    col += (hAcc / 12.0) * u_fHalColor * (u_fHal.x * 3.0);
+    col += (bAcc / 12.0) * (u_fBloom.x * 3.0);
+  }
+  return col;
+}
+
+// Colour stage: matrix, temperature/tint, saturation, contrast, tone curve.
+vec3 filmColor(vec3 rgb) {
+  rgb = u_fMat * rgb;
+  rgb.r *= 1.0 + u_fColor.z * 0.12;
+  rgb.b *= 1.0 - u_fColor.z * 0.12;
+  rgb.g *= 1.0 - u_fColor.w * 0.08;
+  float l = luma709(rgb);
+  rgb = mix(vec3(l), rgb, 1.0 + u_fColor.x);
+  rgb = (rgb - 0.5) * (1.0 + u_fColor.y) + 0.5;
+  rgb = clamp(rgb, 0.0, 1.5);
+  return vec3(toneCh(rgb.r), toneCh(rgb.g), toneCh(rgb.b));
+}
+
+// Finishing stage: vignette, flash, light leak, grain/noise, dust, border, date imprint.
+vec3 filmFinish(vec3 rgb, vec2 uv) {
+  float aspect = u_res.x / u_res.y;
+  vec2 q = (uv - 0.5) * 2.0;
+  q.x *= 1.0 + (aspect - 1.0) * u_fVig.y;
+  float d = length(q) / 1.41421356;
+
+  if (u_fVig.x > 0.0) {
+    float inner = 0.3 * (1.0 - u_fVig.z * 0.5);
+    float t = clamp((d - inner) / (1.05 - inner), 0.0, 1.0);
+    rgb *= 1.0 - u_fVig.x * (t * t * (3.0 - 2.0 * t));
+  }
+  if (u_fFlash.x > 0.0) {
+    float boost = u_fFlash.x * 0.55 * (1.0 - smoothstep(0.0, 0.5 + 0.5 * u_fFlash.y, d));
+    rgb *= 1.0 + boost;
+    rgb *= 1.0 - u_fFlash.x * 0.25 * smoothstep(0.3, 1.0, d);
+  }
+  if (u_fLeak.x > 0.0) {
+    vec2 lc = vec2(u_fLeak.z, 0.5);
+    float ld = length((uv - lc) * vec2(1.0, 0.6));
+    float leak = exp(-ld * ld * 9.0) * (0.65 + 0.35 * sin(uv.y * 7.0 + u_fLeak.y * 20.0));
+    vec3 lcol = hue2rgb(u_fLeak.y);
+    rgb = 1.0 - (1.0 - rgb) * (1.0 - leak * u_fLeak.x * lcol);
+  }
+  if (u_fGrain.x > 0.0) {
+    float cellPx = max(1.0, u_fGrain.y * (u_res.y / 1080.0));
+    vec2 cell = floor(uv * u_res / cellPx);
+    float h1 = fHash(cell, u_seed);
+    float h2 = fHash(cell + 17.3, u_seed + 3.1);
+    float nl = mix((h1 + h2) * 0.5, h1, u_fGrain.z) - 0.5;
+    vec3 nc = vec3(h1, fHash(cell + 5.7, u_seed + 1.3), fHash(cell + 9.1, u_seed + 2.2)) - 0.5;
+    vec3 n = mix(vec3(nl), nc, u_fGrain.w);
+    float lum = luma709(rgb);
+    float amp = u_fGrain.x * 0.5 * mix(1.0, 0.25 + 1.5 * (1.0 - lum), u_fGrainShadow);
+    rgb += n * amp;
+  }
+  if (u_fOptics.z > 0.0) {
+    vec2 dc = floor(uv * u_res / 6.0);
+    float dh = fHash(dc, 91.0);
+    vec2 inCell = fract(uv * u_res / 6.0) - 0.5;
+    float speck = step(1.0 - 0.012 * u_fOptics.z, dh) * (1.0 - smoothstep(0.1, 0.45, length(inCell)));
+    float sx = fHash(vec2(floor(uv.x * u_res.x / 3.0), 7.0), 55.0);
+    float scratch = step(1.0 - 0.0025 * u_fOptics.z, sx) * 0.35;
+    rgb = mix(rgb, vec3(0.92), clamp(speck * 0.8 + scratch, 0.0, 1.0));
+  }
+  if (u_hasDate > 0.5) {
+    vec2 dp = (uv - u_dateRect.xy) / u_dateRect.zw;
+    if (dp.x >= 0.0 && dp.x <= 1.0 && dp.y >= 0.0 && dp.y <= 1.0) {
+      float a = texture2D(u_dateTex, dp).a;
+      rgb = mix(rgb, u_dateColor, a);
+    }
+  }
+  if (u_fBorder.x > 0.5) {
+    float w = u_fBorder.y;
+    float bx = w * u_res.y / u_res.x;
+    float bottom = u_fBorder.x > 1.5 ? w * 3.0 : w;
+    bool inside = uv.x > bx && uv.x < 1.0 - bx && uv.y > w && uv.y < 1.0 - bottom;
+    if (!inside) rgb = u_fBorder.x > 1.5 ? vec3(0.96, 0.95, 0.91) : vec3(0.04);
+  }
+  return rgb;
+}
 
 vec4 sample3DLut(sampler2D lut, vec3 color, float size) {
   float maxIdx = size - 1.0;
@@ -72,6 +233,9 @@ void main() {
   }
 
   vec3 rgb = origColor.rgb;
+  if (u_film > 0.5) {
+    rgb = filmColor(filmBase(v_texCoord));
+  }
 
   // 1. 3D LUT Transformation
   if (u_hasLut > 0.5) {
@@ -121,6 +285,10 @@ void main() {
     rgb = rgb * (1.0 - f) + vec3(f);
   }
 
+  if (u_film > 0.5) {
+    rgb = filmFinish(rgb, v_texCoord);
+  }
+
   gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), origColor.a);
 }
 `;
@@ -139,6 +307,11 @@ export class WebGLLutPipeline {
   private lutTexturesCache: Map<string, { texture: WebGLTexture; size: number }> = new Map();
   private maxCachedLuts: number = 6;
   private isContextLost = false;
+  private filmProfile: CameraProfile | null = null;
+  private dateTexture: WebGLTexture | null = null;
+  private dateKey = '';
+  private dateAspect = 1;
+  private frameCounter = 0;
 
   // Uniform locations
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
@@ -197,6 +370,9 @@ export class WebGLLutPipeline {
     const fs = gl.createShader(gl.FRAGMENT_SHADER)!;
     gl.shaderSource(fs, FS_SOURCE);
     gl.compileShader(fs);
+    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+      console.error('Fragment shader compile error:', gl.getShaderInfoLog(fs));
+    }
 
     const prog = gl.createProgram()!;
     gl.attachShader(prog, vs);
@@ -230,6 +406,9 @@ export class WebGLLutPipeline {
       'u_fade',
       'u_compareActive',
       'u_compareSplit',
+      'u_film', 'u_res', 'u_seed', 'u_fMat', 'u_fColor', 'u_fTone', 'u_fGrain', 'u_fGrainShadow',
+      'u_fHal', 'u_fHalColor', 'u_fBloom', 'u_fVig', 'u_fOptics', 'u_fLeak', 'u_fFlash', 'u_fBorder',
+      'u_hasDate', 'u_dateRect', 'u_dateColor', 'u_dateTex',
     ];
 
     this.uniforms = {};
@@ -363,6 +542,111 @@ export class WebGLLutPipeline {
     return texture;
   }
 
+  /** Sets (or clears with null) the virtual camera rendered by the film stage. Cheap; applied on the next frame. */
+  public setFilmProfile(profile: CameraProfile | null): void {
+    this.filmProfile = profile && !isNeutralProfile(profile) ? profile : null;
+  }
+
+  /** True when the film stage can really run (WebGL program linked), so the UI never claims a fake effect. */
+  public get filmSupported(): boolean {
+    return Boolean(this.gl && this.program && !this.isContextLost);
+  }
+
+  private uploadDateTexture(
+    text: string,
+    width: number,
+    height: number,
+    pos: 'bottomRight' | 'bottomLeft'
+  ): [number, number, number, number] | null {
+    const gl = this.gl;
+    if (!gl || typeof document === 'undefined') return null;
+    if (text !== this.dateKey || !this.dateTexture) {
+      const c = document.createElement('canvas');
+      c.width = 512;
+      c.height = 64;
+      const ctx = c.getContext('2d');
+      if (!ctx) return null;
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.font = 'bold 52px "Courier New", monospace';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      const textW = Math.min(c.width - 8, ctx.measureText(text).width);
+      ctx.fillText(text, 4, c.height / 2 + 2);
+      // Fraction of the texture's width that actually holds text.
+      this.dateAspect = (textW + 8) / c.height;
+      if (!this.dateTexture) this.dateTexture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.dateTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+      this.dateKey = text;
+    }
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.dateTexture);
+    // The rect covers the whole 512x64 texture: its height is 3.2% of the image, width follows the 8:1 texture.
+    const hUv = 0.032;
+    const wUv = (hUv * height * (512 / 64)) / width;
+    const margin = 0.035;
+    // Right-aligned text sits at the right end of the texture area only if we shift by the unused part.
+    const usedUv = (hUv * height * this.dateAspect) / width;
+    const x = pos === 'bottomLeft' ? margin : 1 - margin - usedUv;
+    return [x, 1 - margin - hUv, wUv, hUv];
+  }
+
+  private applyFilmUniforms(width: number, height: number): void {
+    const gl = this.gl;
+    if (!gl) return;
+    const u = this.uniforms;
+    const p = this.filmProfile;
+    if (!p) {
+      gl.uniform1f(u.u_film, 0.0);
+      gl.uniform1f(u.u_hasDate, 0.0);
+      return;
+    }
+    gl.uniform1f(u.u_film, 1.0);
+    gl.uniform2f(u.u_res, width, height);
+    this.frameCounter = (this.frameCounter + 1) % 24;
+    gl.uniform1f(u.u_seed, this.frameCounter * 1.7);
+    const m = p.color.matrix; // row-major -> column-major (WebGL1 requires transpose=false)
+    gl.uniformMatrix3fv(u.u_fMat, false, new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]));
+    gl.uniform4f(u.u_fColor, p.color.saturation, p.color.contrast, p.color.temperature, p.color.tint);
+    gl.uniform4f(u.u_fTone, p.tone.blackPoint, p.tone.shadowLift, p.tone.midGamma, p.tone.highlightRolloff);
+    gl.uniform4f(u.u_fGrain, p.grain.amount, p.grain.size, p.grain.roughness, p.grain.chroma);
+    gl.uniform1f(u.u_fGrainShadow, p.grain.shadowBias);
+    gl.uniform4f(u.u_fHal, p.halation.amount, p.halation.radius, p.halation.threshold, 0);
+    gl.uniform3f(u.u_fHalColor, p.halation.color[0], p.halation.color[1], p.halation.color[2]);
+    gl.uniform3f(u.u_fBloom, p.bloom.amount, p.bloom.radius, p.bloom.threshold);
+    gl.uniform3f(u.u_fVig, p.vignette.amount, p.vignette.roundness, p.vignette.softness);
+    gl.uniform3f(u.u_fOptics, p.softness, p.chromaticAberration, p.dust);
+    gl.uniform3f(u.u_fLeak, p.lightLeak.amount, p.lightLeak.hue / 360, p.lightLeak.position);
+    gl.uniform2f(u.u_fFlash, p.flash.amount, p.flash.falloff);
+    gl.uniform2f(
+      u.u_fBorder,
+      p.border.style === 'film' ? 1 : p.border.style === 'instant' ? 2 : 0,
+      p.border.width
+    );
+
+    let hasDate = 0.0;
+    if (p.dateImprint.enabled) {
+      const rect = this.uploadDateTexture(
+        formatDateImprint(new Date(), p.dateImprint.format),
+        width,
+        height,
+        p.dateImprint.position
+      );
+      if (rect) {
+        hasDate = 1.0;
+        gl.uniform1i(u.u_dateTex, 2);
+        gl.uniform4f(u.u_dateRect, rect[0], rect[1], rect[2], rect[3]);
+        gl.uniform3f(u.u_dateColor, p.dateImprint.color[0], p.dateImprint.color[1], p.dateImprint.color[2]);
+      }
+    }
+    gl.uniform1f(u.u_hasDate, hasDate);
+  }
+
   /**
    * Renders the source image or video element with active LUT and Color Adjustments
    */
@@ -435,6 +719,9 @@ export class WebGLLutPipeline {
     gl.uniform1f(this.uniforms.u_compareActive, 0.0);
     gl.uniform1f(this.uniforms.u_compareSplit, lookState.compareSplitPosition / 100);
 
+    // 5. Virtual camera film stage (u_film = 0 when no profile is set)
+    this.applyFilmUniforms(width, height);
+
     // Draw full-screen quad
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
@@ -481,6 +768,10 @@ export class WebGLLutPipeline {
     if (this.imageTexture) {
       gl.deleteTexture(this.imageTexture);
       this.imageTexture = null;
+    }
+    if (this.dateTexture) {
+      gl.deleteTexture(this.dateTexture);
+      this.dateTexture = null;
     }
 
     if (this.posBuffer) {

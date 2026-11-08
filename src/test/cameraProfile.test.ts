@@ -7,6 +7,7 @@ import {
   clampProfile,
   duplicateProfile,
   exportProfile,
+  formatDateImprint,
   grainHash,
   importProfile,
   isNeutralProfile,
@@ -111,6 +112,14 @@ describe('cameraProfile model', () => {
     const r = importProfile(json, 'u');
     expect(r.ok && r.profile.grain.amount).toBe(1);
     expect(r.ok && r.profile.name.length).toBe(60);
+  });
+
+  it('formats the date imprint in every supported style', () => {
+    const d = new Date(2004, 10, 8, 9, 5, 7);
+    expect(formatDateImprint(d, 'yy mm dd')).toBe("'04 11 08");
+    expect(formatDateImprint(d, 'dd mm yy')).toBe("08 11 '04");
+    expect(formatDateImprint(d, 'mm/dd/yy')).toBe('11/08/04');
+    expect(formatDateImprint(d, 'time')).toBe('09:05:07');
   });
 
   it('duplicate makes an editable copy; reset restores factory values only for built-ins', () => {

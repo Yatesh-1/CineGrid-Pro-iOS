@@ -355,6 +355,25 @@ export function grainHash(x: number, y: number, seed: number): number {
   return s - Math.floor(s);
 }
 
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** Text burned into the image by the date imprint, e.g. "'04 11 08" (yy mm dd). */
+export function formatDateImprint(d: Date, format: DateFormat): string {
+  const yy = pad2(d.getFullYear() % 100);
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  switch (format) {
+    case 'dd mm yy':
+      return `${dd} ${mm} '${yy}`;
+    case 'mm/dd/yy':
+      return `${mm}/${dd}/${yy}`;
+    case 'time':
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    default:
+      return `'${yy} ${mm} ${dd}`;
+  }
+}
+
 export function isNeutralProfile(p: CameraProfile): boolean {
   const { id, name, kind, description, builtIn, ...rest } = p;
   const { id: _i, name: _n, kind: _k, description: _d, builtIn: _b, ...nrest } = NEUTRAL_PROFILE;
