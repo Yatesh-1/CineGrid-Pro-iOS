@@ -1254,6 +1254,18 @@ export function App() {
     restoreWebCamera: () => {
       initCamera(activeDeviceId);
     },
+    // Home / lock / app switch mid-recording: the native side already finalised the file; save it and reset the HUD.
+    onRecordingInterrupted: (res) => {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      setIsRecordingVideo(false);
+      const clip = cinemaVideoService.endExternalRecording();
+      saveNativeClip(res, clip?.clipName)
+        .then(() => showToast('Recording was interrupted and has been saved', 3500))
+        .catch((err) => showToast(`Could not save the interrupted recording: ${(err as Error)?.message || 'unknown error'}`, 4000));
+    },
   });
   nativeWantedRef.current = nativeFilm.intended;
   // The flash button reflects the camera's real flash unit while native owns the camera.

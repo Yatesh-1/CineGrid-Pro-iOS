@@ -236,8 +236,11 @@ public class NativeFilmCameraPlugin extends Plugin {
     protected void handleOnPause() {
         // The camera must be released when the app leaves the foreground; the web layer re-starts it on resume.
         if (session != null) {
+            JSObject payload = new JSObject();
+            JSObject rec = session.finishRecordingForInterrupt();
+            if (rec != null) payload.put("recording", rec);
             stopSession();
-            notifyListeners("interrupted", new JSObject());
+            notifyListeners("interrupted", payload);
         }
         super.handleOnPause();
     }
@@ -1183,43 +1186,69 @@ public class NativeFilmCameraPlugin extends Plugin {
             });
         }
 
+        /** Ends the recording on the calling (GL) thread and returns what was really written. Throws if nothing usable. */
+        private JSObject finishRecordingNow() throws Exception {
+            final NativeFilmRecorder r = recorder;
+            if (!recording || r == null) throw new IllegalStateException("Not recording.");
+            recording = false; // no more frames are fed from here on
+            try {
+                NativeFilmRecorder.Result res = r.finish();
+                if (encSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, encSurface);
+                encSurface = EGL14.EGL_NO_SURFACE;
+                recorder = null;
+                if (res.frames == 0 || res.bytes == 0) throw new IllegalStateException("The recording contains no video frames.");
+                JSObject o = new JSObject();
+                o.put("path", res.file.getAbsolutePath());
+                o.put("width", res.width);
+                o.put("height", res.height);
+                o.put("frames", res.frames);
+                o.put("durationMs", res.durationMs);
+                o.put("avgFps", Math.round(res.avgFps * 10) / 10.0);
+                o.put("bytes", res.bytes);
+                o.put("audio", res.audio);
+                o.put("audioNote", res.audioNote);
+                o.put("videoEncoder", res.videoEncoder);
+                o.put("audioEncoder", res.audioEncoder);
+                return o;
+            } catch (Exception e) {
+                recorder = null;
+                throw e;
+            }
+        }
+
         void stopRecording(PluginCall call) {
             glHandler.post(() -> {
-                final NativeFilmRecorder r = recorder;
-                if (!recording || r == null) {
-                    call.reject("Not recording.");
-                    return;
-                }
-                recording = false; // no more frames are fed from here on
                 try {
-                    NativeFilmRecorder.Result res = r.finish();
-                    if (encSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, encSurface);
-                    encSurface = EGL14.EGL_NO_SURFACE;
-                    recorder = null;
-                    if (res.frames == 0 || res.bytes == 0) {
-                        call.reject("The recording contains no video frames.");
-                        return;
-                    }
-                    JSObject o = new JSObject();
-                    o.put("path", res.file.getAbsolutePath());
-                    o.put("width", res.width);
-                    o.put("height", res.height);
-                    o.put("frames", res.frames);
-                    o.put("durationMs", res.durationMs);
-                    o.put("avgFps", Math.round(res.avgFps * 10) / 10.0);
-                    o.put("bytes", res.bytes);
-                    o.put("audio", res.audio);
-                    o.put("audioNote", res.audioNote);
-                    o.put("videoEncoder", res.videoEncoder);
-                    o.put("audioEncoder", res.audioEncoder);
-                    call.resolve(o);
+                    call.resolve(finishRecordingNow());
                 } catch (Exception e) {
-                    recorder = null;
                     call.reject("Could not finish the recording: " + e.getMessage());
                 }
             });
         }
 
+        /**
+         * Used when the app is leaving the foreground mid-recording: finalises the file and returns it so the web layer
+         * can save it instead of losing it. Waits briefly for the GL thread; returns null if there was nothing to save.
+         */
+        JSObject finishRecordingForInterrupt() {
+            if (!recording || glHandler == null) return null;
+            final JSObject[] out = new JSObject[1];
+            final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+            glHandler.post(() -> {
+                try {
+                    out[0] = finishRecordingNow();
+                } catch (Exception e) {
+                    android.util.Log.w(TAG, "interrupted recording could not be finalised: " + e.getMessage());
+                } finally {
+                    done.countDown();
+                }
+            });
+            try {
+                done.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            return out[0];
+        }
         private void setUniforms() {
             ProfileData p = profile;
             int[] L = uniformLoc;

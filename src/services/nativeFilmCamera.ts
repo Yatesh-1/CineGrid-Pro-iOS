@@ -88,7 +88,7 @@ interface NativeFilmPluginApi {
   getStats(): Promise<NativeFilmStats>;
   startRecording(o: { audio: boolean; height: number }): Promise<{ path: string; width: number; height: number }>;
   stopRecording(): Promise<NativeRecording>;
-  addListener(event: 'interrupted', cb: () => void): Promise<{ remove: () => Promise<void> }>;
+  addListener(event: 'interrupted', cb: (e: { recording?: NativeRecording }) => void): Promise<{ remove: () => Promise<void> }>;
 }
 
 const Plugin = registerPlugin<NativeFilmPluginApi>('NativeFilmCamera');
@@ -108,7 +108,8 @@ export const nativeFilm = {
   getStats: () => Plugin.getStats(),
   startRecording: (audio: boolean, height: number) => Plugin.startRecording({ audio, height }),
   stopRecording: () => Plugin.stopRecording(),
-  onInterrupted: (cb: () => void) => Plugin.addListener('interrupted', cb),
+  /** Fires when the app leaves the foreground. If a recording was running it was finalised, and is passed here so it can be saved. */
+  onInterrupted: (cb: (e: { recording?: NativeRecording }) => void) => Plugin.addListener('interrupted', cb),
 };
 
 /**

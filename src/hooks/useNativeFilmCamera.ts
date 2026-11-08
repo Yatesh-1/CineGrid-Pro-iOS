@@ -22,6 +22,8 @@ interface Params {
   releaseWebCamera: () => void;
   /** Re-open the web camera after native let go of it. */
   restoreWebCamera: () => void;
+  /** A recording was running when the app left the foreground: it was finalised and must be saved by the caller. */
+  onRecordingInterrupted?: (recording: NativeRecording) => void;
 }
 
 export interface NativeFilmState {
@@ -69,11 +71,13 @@ export function useNativeFilmCamera(p: Params): NativeFilmState {
 
   const profileRef = useRef(p.profile);
   const handoffRef = useRef({ release: p.releaseWebCamera, restore: p.restoreWebCamera });
+  const interruptedRef = useRef(p.onRecordingInterrupted);
   const startedRect = useRef<{ w: number; h: number } | null>(null);
   const hadNative = useRef(false);
   useEffect(() => {
     profileRef.current = p.profile;
     handoffRef.current = { release: p.releaseWebCamera, restore: p.restoreWebCamera };
+    interruptedRef.current = p.onRecordingInterrupted;
   });
 
   // ---- lifecycle: start / restart / stop ----------------------------------------------------------------------
@@ -143,7 +147,8 @@ export function useNativeFilmCamera(p: Params): NativeFilmState {
     let remove: (() => Promise<void>) | null = null;
     let gone = false;
     nativeFilm
-      .onInterrupted(() => {
+      .onInterrupted((e) => {
+        if (e?.recording) interruptedRef.current?.(e.recording);
         setActive(false);
         document.documentElement.classList.remove('native-film');
         if (!document.hidden) setEpoch((e) => e + 1);
