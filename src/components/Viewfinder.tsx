@@ -26,6 +26,14 @@ import { cameraService } from '../services/cameraService';
 import { WebGLLutPipeline } from '../utils/webglLutPipeline';
 import { cameraProfileStore } from '../services/cameraProfileStore';
 import { renderProbe } from '../utils/renderProbe';
+
+/**
+ * Longest side of the live GPU preview. Measured on the test phone (OPPO CPH2421): the full 1080x1920 camera frame
+ * gave 9-15 fps, 1280 gave 15-19 fps, and going lower (360x640) gave no further gain, because the remaining cost is
+ * uploading each video frame to the GPU, not shading. Photos never use this size: they are re-rendered from the
+ * full-resolution still (utils/renderLookStill.ts).
+ */
+const PREVIEW_MAX_SIDE = 1280;
 import type { LookState, LutDefinition } from '../types/lut';
 import { Camera, RefreshCw, AlertCircle } from 'lucide-react';
 import { DualCameraViewportOverlay } from './dual/DualCameraViewportOverlay';
@@ -196,7 +204,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
         const vw = (sourceEl as HTMLVideoElement).videoWidth || (sourceEl as HTMLImageElement).naturalWidth || (sourceEl as any).width || 0;
         if (vw > 0) {
           const t0 = performance.now();
-          pipelineRef.current.renderFrame(sourceEl, lookState, activeLut);
+          pipelineRef.current.renderFrame(sourceEl, lookState, activeLut, PREVIEW_MAX_SIDE);
           const t1 = performance.now();
           renderProbe.recordFrame(t1 - t0, t1);
           renderProbe.setContextStatus(pipelineRef.current.contextStatus);
