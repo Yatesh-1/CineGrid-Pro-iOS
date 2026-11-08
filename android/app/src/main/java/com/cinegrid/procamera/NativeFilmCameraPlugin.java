@@ -1163,7 +1163,8 @@ public class NativeFilmCameraPlugin extends Plugin {
                     // upright 3:4: 1440 -> 1080x1440, 960 -> 720x960, 720 -> 540x720
                     recH = height == 960 || height == 720 ? height : 1440;
                     recW = recH * 3 / 4;
-                    File dir = new File(context.getCacheDir(), "native_videos");
+                    // Persistent app storage (same folder the web recorder uses), not the cache the OS may clear.
+                    File dir = new File(context.getFilesDir(), "recordings");
                     File out = new File(dir, "film_" + System.currentTimeMillis() + ".mp4");
                     NativeFilmRecorder r = new NativeFilmRecorder(context, out, recW, recH, recH >= 1440 ? 14_000_000 : 8_000_000, withAudio);
                     encSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, r.inputSurface(), new int[]{EGL14.EGL_NONE}, 0);

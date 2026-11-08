@@ -118,13 +118,14 @@ export const nativeFilm = {
  */
 export const NATIVE_RECORD_HEIGHT = 960;
 
-/** A saved recording as a blob URL, the form the in-app gallery and the device-save helper already work with. */
-export async function nativeRecordingToBlobUrl(path: string): Promise<string> {
-  const res = await fetch(Capacitor.convertFileSrc(`file://${path}`));
-  if (!res.ok) throw new Error(`Could not read the recording (${res.status}).`);
-  return URL.createObjectURL(await res.blob());
+/**
+ * URL of a saved recording inside app storage. Deliberately NOT a blob: `saveToDevice` copies files served from
+ * `/_capacitor_file_/` natively, so a clip of any length never passes through web-view memory (a 170 MB clip loaded as a
+ * blob stalled the gallery save and filled the heap).
+ */
+export function nativeRecordingUrl(path: string): string {
+  return Capacitor.convertFileSrc(`file://${path}`);
 }
-
 /** Loads a still saved by the native camera as a bitmap. EXIF orientation is applied, so it comes out upright. */
 export async function nativeStillToBitmap(still: Pick<NativeStill, 'path'>): Promise<ImageBitmap> {
   const res = await fetch(Capacitor.convertFileSrc(`file://${still.path}`));

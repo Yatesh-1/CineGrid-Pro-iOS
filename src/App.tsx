@@ -67,7 +67,7 @@ import { cameraProfileStore } from './services/cameraProfileStore';
 import { renderLookStill } from './utils/renderLookStill';
 import { renderProbe } from './utils/renderProbe';
 import { useNativeFilmCamera } from './hooks/useNativeFilmCamera';
-import { NATIVE_RECORD_HEIGHT, nativeRecordingToBlobUrl } from './services/nativeFilmCamera';
+import { NATIVE_RECORD_HEIGHT, nativeRecordingUrl } from './services/nativeFilmCamera';
 import { loadPrefs, savePrefs } from './utils/uiPrefs';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
@@ -2105,7 +2105,7 @@ export function App() {
   // Video with the native film camera: Camera2 -> film shader -> hardware H.264 + AAC, all native. Nothing is sent
   // through the web recorder, and the result (size, fps, audio) is what the encoder really wrote.
   const saveNativeClip = async (res: Awaited<ReturnType<typeof nativeFilm.stopRecording>>, label?: string) => {
-    const videoUrl = await nativeRecordingToBlobUrl(res.path);
+    const videoUrl = nativeRecordingUrl(res.path);
     // clip names from the cinema slate already end in .mp4: strip it so the file is not called x.mp4_123.mp4
     const fileName = `${(label ?? 'CINEGRID_VID').replace(/\.mp4$/i, '')}_${Date.now()}.mp4`;
     saveToDevice(videoUrl, fileName, 'video/mp4').catch((err) => console.warn('Save to device failed:', err));
