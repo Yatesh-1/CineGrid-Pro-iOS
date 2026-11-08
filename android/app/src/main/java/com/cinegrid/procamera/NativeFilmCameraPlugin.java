@@ -11,6 +11,12 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureFailure;
+import android.hardware.camera2.TotalCaptureResult;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
+import android.os.Build;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
@@ -31,6 +37,7 @@ import android.webkit.WebView;
 import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.core.content.ContextCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -40,12 +47,16 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -139,6 +150,44 @@ public class NativeFilmCameraPlugin extends Plugin {
         });
     }
 
+    @PluginMethod
+    public void takePhoto(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        session.takePhoto(call);
+    }
+
+    /** setEv({ stops }) -> { evStops } (the value the camera really accepted, quantised to its step). */
+    @PluginMethod
+    public void setEv(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        JSObject o = new JSObject();
+        o.put("evStops", session.setEv(call.getDouble("stops", 0.0)));
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void setZoom(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        JSObject o = new JSObject();
+        o.put("zoom", session.setZoom(call.getFloat("ratio", 1f)));
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void setTorch(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        boolean applied = session.setTorch(Boolean.TRUE.equals(call.getBoolean("on", false)));
+        if (!applied) { call.reject("This camera has no flash unit."); return; }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setWhiteBalance(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        String mode = call.getString("mode", "auto");
+        if (!session.setAwb(mode)) { call.reject("This camera does not support the white-balance mode '" + mode + "'."); return; }
+        call.resolve();
+    }
     @PluginMethod
     public void stop(PluginCall call) {
         stopSession();
@@ -305,6 +354,17 @@ public class NativeFilmCameraPlugin extends Plugin {
         private CameraDevice camera;
         private CameraCaptureSession capture;
         private String cameraId;
+        private CameraCharacteristics characteristics;
+        private CaptureRequest.Builder previewBuilder;
+        private ImageReader jpegReader;
+        private Size jpegSize = new Size(0, 0);
+        private volatile PluginCall photoCall;
+        private Range<Integer> fpsRange;
+        private float evStep = 0f;
+        private Range<Integer> evRange = new Range<>(0, 0);
+        private int evIndex = 0;
+        private float zoomRatio = 1f;
+        private boolean torchOn = false;
         private Size previewSize = new Size(1440, 1080);
         private int sensorOrientation = 90;
         private volatile String state = "starting";
@@ -533,6 +593,11 @@ public class NativeFilmCameraPlugin extends Plugin {
                 previewSize = pickPreviewSize(map.getOutputSizes(SurfaceTexture.class));
                 final Range<Integer> fps = pickFps(cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES));
                 final CameraCharacteristics ccf = cc;
+                characteristics = cc;
+                fpsRange = fps;
+                jpegSize = pickStillSize(map.getOutputSizes(ImageFormat.JPEG));
+                if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) != null) evStep = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP).floatValue();
+                if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) != null) evRange = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
 
                 glHandler.post(() -> {
                     st.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
@@ -562,22 +627,32 @@ public class NativeFilmCameraPlugin extends Plugin {
                     @Override public void onOpened(CameraDevice device) {
                         camera = device;
                         try {
-                            device.createCaptureSession(Collections.singletonList(camSurface), new CameraCaptureSession.StateCallback() {
+                            jpegReader = ImageReader.newInstance(jpegSize.getWidth(), jpegSize.getHeight(), ImageFormat.JPEG, 2);
+                            jpegReader.setOnImageAvailableListener(Session.this::onStillAvailable, camHandler);
+                            List<Surface> surfaces = Arrays.asList(camSurface, jpegReader.getSurface());
+                            device.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
                                 @Override public void onConfigured(CameraCaptureSession s) {
                                     capture = s;
                                     try {
-                                        CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                                        b.addTarget(camSurface);
-                                        b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-                                        b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
-                                        if (fps != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps);
-                                        s.setRepeatingRequest(b.build(), null, camHandler);
+                                        previewBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                                        previewBuilder.addTarget(camSurface);
+                                        previewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                                        previewBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+                                        if (fps != null) previewBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps);
+                                        s.setRepeatingRequest(previewBuilder.build(), null, camHandler);
                                         state = "active";
                                         PluginCall c = startCall;
                                         startCall = null;
                                         if (c != null) {
                                             JSObject o = stats();
                                             o.put("fpsRange", fps == null ? "default" : fps.getLower() + "-" + fps.getUpper());
+                                            o.put("stillSize", jpegSize.getWidth() + "x" + jpegSize.getHeight());
+                                            o.put("evMin", evRange.getLower());
+                                            o.put("evMax", evRange.getUpper());
+                                            o.put("evStep", evStep);
+                                            o.put("zoomMax", maxZoom());
+                                            o.put("hasFlash", Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE)));
+                                            o.put("awbModes", awbModeNames());
                                             c.resolve(o);
                                         }
                                     } catch (CameraAccessException e) {
@@ -604,6 +679,182 @@ public class NativeFilmCameraPlugin extends Plugin {
             }
         }
 
+        // ---- Hardware controls (real Camera2 requests: they change the sensor/ISP, not a visual overlay) --------
+
+        /** Re-issues the repeating preview request after a control changed. */
+        private void applyRepeating() {
+            CameraCaptureSession s = capture;
+            CaptureRequest.Builder b = previewBuilder;
+            if (s == null || b == null) return;
+            try {
+                s.setRepeatingRequest(b.build(), null, camHandler);
+            } catch (Exception e) {
+                android.util.Log.w(TAG, "could not update preview request: " + e.getMessage());
+            }
+        }
+
+        /** Exposure compensation in stops, quantised to what the camera supports. Returns the stops actually set. */
+        double setEv(double stops) {
+            if (evStep <= 0f || previewBuilder == null) return 0;
+            int idx = Math.max(evRange.getLower(), Math.min(evRange.getUpper(), Math.round((float) (stops / evStep))));
+            evIndex = idx;
+            previewBuilder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, idx);
+            camHandler.post(this::applyRepeating);
+            return idx * evStep;
+        }
+
+        float maxZoom() {
+            if (characteristics == null) return 1f;
+            if (Build.VERSION.SDK_INT >= 30) {
+                Range<Float> r = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+                if (r != null) return r.getUpper();
+            }
+            Float d = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+            return d == null ? 1f : d;
+        }
+
+        /** Zoom through the camera (zoom ratio on API 30+, else a centred crop region). Returns the ratio set. */
+        float setZoom(float ratio) {
+            if (previewBuilder == null || characteristics == null) return 1f;
+            float z = Math.max(1f, Math.min(maxZoom(), ratio));
+            zoomRatio = z;
+            if (Build.VERSION.SDK_INT >= 30 && characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) != null) {
+                previewBuilder.set(CaptureRequest.CONTROL_ZOOM_RATIO, z);
+            } else {
+                android.graphics.Rect a = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+                if (a != null) {
+                    int w = Math.round(a.width() / z), h = Math.round(a.height() / z);
+                    previewBuilder.set(CaptureRequest.SCALER_CROP_REGION, new android.graphics.Rect(a.centerX() - w / 2, a.centerY() - h / 2, a.centerX() + w / 2, a.centerY() + h / 2));
+                }
+            }
+            camHandler.post(this::applyRepeating);
+            return z;
+        }
+
+        boolean setTorch(boolean on) {
+            if (previewBuilder == null || !Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE))) return false;
+            torchOn = on;
+            previewBuilder.set(CaptureRequest.FLASH_MODE, on ? CaptureRequest.FLASH_MODE_TORCH : CaptureRequest.FLASH_MODE_OFF);
+            camHandler.post(this::applyRepeating);
+            return true;
+        }
+
+        private static final String[] AWB_NAMES = {"off", "auto", "incandescent", "fluorescent", "warm-fluorescent", "daylight", "cloudy-daylight", "twilight", "shade"};
+
+        JSArray awbModeNames() {
+            JSArray out = new JSArray();
+            int[] modes = characteristics == null ? null : characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES);
+            if (modes != null) for (int m : modes) if (m >= 1 && m < AWB_NAMES.length) out.put(AWB_NAMES[m]);
+            return out;
+        }
+
+        /** Hardware white-balance preset by name (only modes the camera lists). Returns false if unsupported. */
+        boolean setAwb(String name) {
+            int[] modes = characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES);
+            for (int i = 1; i < AWB_NAMES.length; i++) {
+                if (!AWB_NAMES[i].equals(name)) continue;
+                boolean ok = false;
+                if (modes != null) for (int m : modes) if (m == i) ok = true;
+                if (!ok || previewBuilder == null) return false;
+                previewBuilder.set(CaptureRequest.CONTROL_AWB_MODE, i);
+                camHandler.post(this::applyRepeating);
+                return true;
+            }
+            return false;
+        }
+
+        // ---- Still capture -----------------------------------------------------------------------------------
+
+        void takePhoto(PluginCall call) {
+            camHandler.post(() -> {
+                if (camera == null || capture == null || jpegReader == null) {
+                    call.reject("The camera is not ready.");
+                    return;
+                }
+                if (photoCall != null) {
+                    call.reject("A photo is already being taken.");
+                    return;
+                }
+                try {
+                    photoCall = call;
+                    CaptureRequest.Builder b = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                    b.addTarget(jpegReader.getSurface());
+                    b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                    b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+                    // Same hardware settings as the preview, so the photo reflects the EV / white balance / zoom on screen.
+                    b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evIndex);
+                    Integer awb = previewBuilder.get(CaptureRequest.CONTROL_AWB_MODE);
+                    if (awb != null) b.set(CaptureRequest.CONTROL_AWB_MODE, awb);
+                    if (Build.VERSION.SDK_INT >= 30 && characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) != null) {
+                        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio);
+                    } else if (previewBuilder.get(CaptureRequest.SCALER_CROP_REGION) != null) {
+                        b.set(CaptureRequest.SCALER_CROP_REGION, previewBuilder.get(CaptureRequest.SCALER_CROP_REGION));
+                    }
+                    if (torchOn) b.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+                    b.set(CaptureRequest.JPEG_QUALITY, (byte) 95);
+                    // Portrait phone: the EXIF orientation that makes the saved still upright.
+                    b.set(CaptureRequest.JPEG_ORIENTATION, front ? (sensorOrientation + 0) % 360 : sensorOrientation % 360);
+                    capture.capture(b.build(), new CameraCaptureSession.CaptureCallback() {
+                        @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure f) {
+                            PluginCall c = photoCall;
+                            photoCall = null;
+                            if (c != null) c.reject("The camera could not take the photo (reason " + f.getReason() + ").");
+                        }
+                    }, camHandler);
+                } catch (Exception e) {
+                    PluginCall c = photoCall;
+                    photoCall = null;
+                    if (c != null) c.reject("Could not start the photo capture: " + e.getMessage());
+                }
+            });
+        }
+
+        private void onStillAvailable(ImageReader reader) {
+            Image image = null;
+            try {
+                image = reader.acquireLatestImage();
+                if (image == null) return;
+                PluginCall c = photoCall;
+                photoCall = null;
+                java.nio.ByteBuffer buf = image.getPlanes()[0].getBuffer();
+                byte[] bytes = new byte[buf.remaining()];
+                buf.get(bytes);
+                if (c == null) return; // nobody is waiting for this frame
+                File dir = new File(context.getCacheDir(), "native_stills");
+                if (!dir.exists() && !dir.mkdirs()) {
+                    c.reject("Could not create the cache folder for the photo.");
+                    return;
+                }
+                File out = new File(dir, "still_" + System.currentTimeMillis() + ".jpg");
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    fos.write(bytes);
+                }
+                JSObject o = new JSObject();
+                o.put("path", out.getAbsolutePath());
+                o.put("bytes", bytes.length);
+                o.put("width", image.getWidth());
+                o.put("height", image.getHeight());
+                o.put("evStops", evIndex * evStep);
+                o.put("zoom", zoomRatio);
+                c.resolve(o);
+            } catch (Exception e) {
+                PluginCall c = photoCall;
+                photoCall = null;
+                if (c != null) c.reject("Saving the photo failed: " + e.getMessage());
+            } finally {
+                if (image != null) image.close();
+            }
+        }
+
+        /** Largest 4:3 JPEG size (matches the 4:3 frame); else the largest overall. */
+        private static Size pickStillSize(Size[] sizes) {
+            Size best43 = null, best = null;
+            for (Size s : sizes) {
+                if (best == null || s.getWidth() * s.getHeight() > best.getWidth() * best.getHeight()) best = s;
+                if (s.getWidth() * 3 == s.getHeight() * 4 && (best43 == null || s.getWidth() * s.getHeight() > best43.getWidth() * best43.getHeight())) best43 = s;
+            }
+            return best43 != null ? best43 : best;
+        }
         /** Largest 4:3 size up to 1920x1440; falls back to the largest size up to 1920x1080. */
         private static Size pickPreviewSize(Size[] sizes) {
             Size best = null;
