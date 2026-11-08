@@ -315,6 +315,7 @@ export class WebGLLutPipeline {
   private dateKey = '';
   private dateAspect = 1;
   private frameCounter = 0;
+  private gpuTimerExt: unknown = null;
 
   // Uniform locations
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
@@ -342,6 +343,7 @@ export class WebGLLutPipeline {
 
       this.setupShaders();
       this.setupBuffers();
+      this.gpuTimerExt = this.gl.getExtension('EXT_disjoint_timer_query');
     } catch (err) {
       console.warn('Failed to initialize WebGL LUT pipeline:', err);
       this.gl = null;
@@ -548,6 +550,16 @@ export class WebGLLutPipeline {
   /** Sets (or clears with null) the virtual camera rendered by the film stage. Cheap; applied on the next frame. */
   public setFilmProfile(profile: CameraProfile | null): void {
     this.filmProfile = profile && !isNeutralProfile(profile) ? profile : null;
+  }
+
+  /** Whether the GPU can report real execution time (EXT_disjoint_timer_query). Reported, not used for fake numbers. */
+  public get gpuTimerAvailable(): boolean {
+    return Boolean(this.gpuTimerExt);
+  }
+
+  public get contextStatus(): 'ok' | 'lost' | 'none' {
+    if (!this.gl) return 'none';
+    return this.isContextLost ? 'lost' : 'ok';
   }
 
   /** True when the film stage can really run (WebGL program linked), so the UI never claims a fake effect. */

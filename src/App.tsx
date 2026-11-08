@@ -65,6 +65,7 @@ import { type GhostOverlaySettings, DEFAULT_GHOST_SETTINGS } from './types/ghost
 import { type LookState, DEFAULT_LOOK_STATE, type LutDefinition } from './types/lut';
 import { cameraProfileStore } from './services/cameraProfileStore';
 import { renderLookStill } from './utils/renderLookStill';
+import { renderProbe } from './utils/renderProbe';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
 import { FeatureRail } from './components/camera/FeatureRail';
@@ -1385,7 +1386,7 @@ export function App() {
   };
 
   // Helper to capture a single frame with optional EV adjustment
-  const captureSingleFrame = async (evOffset: number = 0, tagSuffix: string = ''): Promise<CapturedPhoto | null> => {
+  const captureSingleFrameCore = async (evOffset: number = 0, tagSuffix: string = ''): Promise<CapturedPhoto | null> => {
     const previewSource = useSimulatedScene ? imageRef.current : videoRef.current;
     if (!previewSource) return null;
 
@@ -1494,6 +1495,16 @@ export function App() {
       // Release the full-resolution bitmap's memory as soon as the JPEGs are made (dispose is idempotent)
       lookStill?.dispose();
       fullRes?.close();
+    }
+  };
+
+  // Same capture, with its real end-to-end time recorded for the performance probe.
+  const captureSingleFrame = async (evOffset: number = 0, tagSuffix: string = ''): Promise<CapturedPhoto | null> => {
+    const t0 = performance.now();
+    try {
+      return await captureSingleFrameCore(evOffset, tagSuffix);
+    } finally {
+      renderProbe.recordCapture(performance.now() - t0);
     }
   };
 

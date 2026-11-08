@@ -1,8 +1,9 @@
-import React, { useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Copy, Download, RotateCcw, Trash2, Upload, Camera, Ban } from 'lucide-react';
 import type { LookState } from '../../types/lut';
 import { cameraProfileStore } from '../../services/cameraProfileStore';
 import type { CameraProfile, BorderStyle, DateFormat, DatePosition } from '../../utils/cameraProfile';
+import { renderProbe, type ProbeSnapshot } from '../../utils/renderProbe';
 
 interface Props {
   lookState: LookState;
@@ -74,6 +75,54 @@ const GROUPS: { title: string; rows: Row[] }[] = [
     ],
   },
 ];
+
+/** Live readout of the render probe. Values the WebView cannot provide show as n/a rather than a guess. */
+const PerfReadout: React.FC = () => {
+  const [open, setOpen] = useState(false);
+  const [snap, setSnap] = useState<ProbeSnapshot>(() => renderProbe.snapshot());
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setInterval(() => setSnap(renderProbe.snapshot()), 1000);
+    return () => window.clearInterval(id);
+  }, [open]);
+  const v = (x: number | null, unit = ''): string => (x === null ? 'n/a' : `${x}${unit}`);
+  const rows: [string, string][] = [
+    ['Preview FPS', v(snap.fps)],
+    ['GPU submit time (avg / max)', `${v(snap.avgRenderMs)} / ${v(snap.maxRenderMs, ' ms')}`],
+    ['Dropped frames', String(snap.droppedFrames)],
+    ['JS heap', v(snap.jsHeapMB, ' MB')],
+    ['GPU execution timer', snap.gpuTimerAvailable ? 'available' : 'not exposed by this WebView'],
+    ['WebGL context', snap.contextStatus],
+    ['Photo capture (last / avg)', `${v(snap.lastCaptureMs)} / ${v(snap.avgCaptureMs, ' ms')}  (${snap.captures})`],
+  ];
+  return (
+    <details
+      className="rounded-xl border border-white/10 bg-zinc-950/60"
+      data-testid="perf-readout"
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="px-3 h-10 flex items-center text-xs font-semibold text-zinc-200 cursor-pointer">Performance</summary>
+      <div className="px-3 pb-3 space-y-1 text-[11px]">
+        {rows.map(([k, val]) => (
+          <div key={k} className="flex justify-between gap-2">
+            <span className="text-zinc-400">{k}</span>
+            <span className="text-zinc-100 tabular-nums text-right">{val}</span>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="mt-1 h-8 px-3 rounded-full text-[11px] font-semibold border border-white/10 bg-zinc-900 text-zinc-200"
+          onClick={() => {
+            renderProbe.reset();
+            setSnap(renderProbe.snapshot());
+          }}
+        >
+          Reset counters
+        </button>
+      </div>
+    </details>
+  );
+};
 
 const MATRIX_LABELS = ['R→R', 'G→R', 'B→R', 'R→G', 'G→G', 'B→G', 'R→B', 'G→B', 'B→B'];
 
@@ -242,6 +291,8 @@ export const CameraProfilePanel: React.FC<Props> = ({ lookState, onChangeLookSta
         </button>
         <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImport} />
       </div>
+
+      <PerfReadout />
 
       {active && (
         <div className="space-y-3 pb-4">

@@ -25,6 +25,7 @@ import { LONG_PRESS_MS, LONG_PRESS_SLOP, sliderSide } from '../utils/exposureBia
 import { cameraService } from '../services/cameraService';
 import { WebGLLutPipeline } from '../utils/webglLutPipeline';
 import { cameraProfileStore } from '../services/cameraProfileStore';
+import { renderProbe } from '../utils/renderProbe';
 import type { LookState, LutDefinition } from '../types/lut';
 import { Camera, RefreshCw, AlertCircle } from 'lucide-react';
 import { DualCameraViewportOverlay } from './dual/DualCameraViewportOverlay';
@@ -194,7 +195,12 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       if (sourceEl && pipelineRef.current && lookState) {
         const vw = (sourceEl as HTMLVideoElement).videoWidth || (sourceEl as HTMLImageElement).naturalWidth || (sourceEl as any).width || 0;
         if (vw > 0) {
+          const t0 = performance.now();
           pipelineRef.current.renderFrame(sourceEl, lookState, activeLut);
+          const t1 = performance.now();
+          renderProbe.recordFrame(t1 - t0, t1);
+          renderProbe.setContextStatus(pipelineRef.current.contextStatus);
+          renderProbe.setGpuTimerAvailable(pipelineRef.current.gpuTimerAvailable);
         }
       }
 
