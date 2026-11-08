@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, Suspense, lazy } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore, Suspense, lazy } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { saveToDevice } from './services/deviceSaveService';
@@ -66,6 +66,7 @@ import { type LookState, DEFAULT_LOOK_STATE, type LutDefinition } from './types/
 import { cameraProfileStore } from './services/cameraProfileStore';
 import { renderLookStill } from './utils/renderLookStill';
 import { renderProbe } from './utils/renderProbe';
+import { useNativeFilmCamera } from './hooks/useNativeFilmCamera';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
 import { FeatureRail } from './components/camera/FeatureRail';
@@ -882,7 +883,10 @@ export function App() {
         : { height: heightOfRes(cinemaConfig.resolution), fps: cinemaConfig.fps };
 
   // Start real device camera with concurrency & state machine coordination
+  // True while the native film camera is meant to own the camera: the web camera must not be opened then.
+  const nativeWantedRef = useRef(false);
   const initCamera = useCallback(async (deviceId?: string) => {
+    if (nativeWantedRef.current) return;
     setCameraError(null);
     // Opening (or re-opening for a new format/lens) takes a moment: show the "starting camera" state, never a blank frame
     setCameraReady(false);
@@ -1226,8 +1230,45 @@ export function App() {
   useEffect(() => {
     setTintFilter(currentTint);
   }, [currentTint]);
+  // Native film camera (Camera2 -> GPU film shader) while a film camera is selected in photo mode on Android.
+  useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
+  const activeFilmProfile = cameraProfileStore.get(lookState.cameraProfileId);
+  const nativeFilm = useNativeFilmCamera({
+    wanted: Boolean(activeFilmProfile) && proSettings.captureMode === 'photo' && !useSimulatedScene,
+    profile: activeFilmProfile,
+    front: isFrontCamera,
+    zoom: zoomLevel,
+    evStops: proSettings.ev,
+    releaseWebCamera: () => {
+      cameraService.detachVideo(videoRef.current);
+      cameraService.releaseCurrentStream();
+      streamRef.current = null;
+      setStream(null);
+    },
+    restoreWebCamera: () => {
+      initCamera(activeDeviceId);
+    },
+  });
+  nativeWantedRef.current = nativeFilm.intended;
+  // The flash button reflects the camera's real flash unit while native owns the camera.
+  const nativeHasFlash = nativeFilm.active ? Boolean(nativeFilm.info?.hasFlash) : null;
+  useEffect(() => {
+    if (nativeHasFlash !== null) setHasTorch(nativeHasFlash);
+  }, [nativeHasFlash]);
+
   // Switch the torch and confirm the camera really did it
   const setTorch = async (nextState: boolean, quiet = false): Promise<boolean> => {
+    if (nativeFilm.active) {
+      try {
+        await nativeFilm.setTorch(nextState);
+        setTorchOn(nextState);
+        return true;
+      } catch {
+        setTorchOn(false);
+        if (!quiet) showToast('Could not switch the flash');
+        return false;
+      }
+    }
     const track = stream?.getVideoTracks()[0];
     const caps = (track?.getCapabilities ? track.getCapabilities() : {}) as { torch?: boolean };
     if (!track || !caps.torch) {
@@ -1252,7 +1293,7 @@ export function App() {
   const handleToggleTorch = async () => {
     const track = stream?.getVideoTracks()[0];
     const caps = (track?.getCapabilities ? track.getCapabilities() : {}) as { torch?: boolean };
-    if (!track || !caps.torch) {
+    if (!(nativeFilm.active ? nativeFilm.info?.hasFlash : track && caps.torch)) {
       showToast(isFrontCamera ? 'Front camera has no flash' : 'Flash is not available on this camera');
       return;
     }
@@ -1412,21 +1453,37 @@ export function App() {
     // Real still from the phone's still pipeline (full sensor resolution) when no LUT canvas is needed;
     // otherwise, or if unavailable, the preview frame as before.
     const frameRatio = frameWidthOverHeight(aspectRatio);
-    const fullRes = !useSimulatedScene
-      ? await cameraService.takeFullResStill(videoRef.current, 4000, Math.max(frameRatio, 1 / frameRatio))
-      : null;
+    // Native film camera: the photo comes from Camera2 (EV, white balance and zoom were applied by the camera itself),
+    // so none of them may be applied again below.
+    const native = nativeFilm.active;
+    const digitalScale = native ? 1 : zoomPlan.digitalScale;
+    let nativeBitmap: ImageBitmap | null = null;
+    if (native) {
+      try {
+        nativeBitmap = (await nativeFilm.takePhoto()).bitmap;
+      } catch (err) {
+        showToast(`Photo failed: ${(err as Error)?.message || 'the camera could not take it'}`, 3500);
+        return null;
+      }
+    }
+    const fullRes = native
+      ? nativeBitmap
+      : !useSimulatedScene
+        ? await cameraService.takeFullResStill(videoRef.current, 4000, Math.max(frameRatio, 1 / frameRatio))
+        : null;
     const source: HTMLVideoElement | HTMLImageElement | ImageBitmap = fullRes ?? previewSource;
     // With a look on, grade the full-resolution still with the same shader as the preview. If the GPU cannot,
     // fall back to the preview-resolution canvas (the previous behaviour) instead of faking detail.
     const lookStill =
-      useLutCanvas && fullRes
+      (useLutCanvas || native) && fullRes
         ? renderLookStill(fullRes, lookState, activeLut, cameraProfileStore.get(lookState.cameraProfileId), {
             ratio: frameRatio,
-            zoom: zoomPlan.digitalScale,
+            zoom: digitalScale,
           })
         : null;
+    if (native && isLutActive && !lookStill) showToast('The film look could not be applied to this photo (GPU unavailable)', 3500);
     const captureSource = lookStill ? lookStill.canvas : useLutCanvas ? lutCanvasRef.current! : source;
-    const skipCss = useLutCanvas;
+    const skipCss = useLutCanvas || native;
 
     try {
     const dataUrl = captureFrameToDataUrl(
@@ -1437,7 +1494,7 @@ export function App() {
       aspectRatio,
       proSettings.burnGridInExport ? selectedGrid.id : undefined,
       skipCss,
-      zoomPlan.digitalScale,
+      digitalScale,
       portraitBlur,
       mirrorActive,
       portraitFocus
@@ -1465,7 +1522,7 @@ export function App() {
           aspectRatio,
           undefined,
           false,
-          zoomPlan.digitalScale,
+          digitalScale,
           0,
           mirrorActive
         )
@@ -1752,7 +1809,9 @@ export function App() {
   // Execute Photo Capture (Supporting Single, Burst, and AEB Bracketing) with State Machine Mutex
   const performCapture = async () => {
     if (isCapturing) return;
-    if (!cameraService.beginCapture()) return;
+    // The web camera's state machine only allows capture while its own stream is ready. With the native film camera the
+    // web stream is closed on purpose and the photo comes from Camera2, so that gate does not apply.
+    if (!nativeFilm.active && !cameraService.beginCapture()) return;
 
     setIsCapturing(true);
 
@@ -2884,6 +2943,7 @@ export function App() {
             lookState={lookState}
             activeLut={activeLut}
             lutCanvasRef={lutCanvasRef}
+          nativePreview={nativeFilm.intended}
             dualCameraConfig={dualCameraConfig}
             secondaryStream={dualSecondaryStream}
             onSwapDualCameras={handleSwapDualCameras}

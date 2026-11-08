@@ -67,6 +67,8 @@ interface ViewfinderProps {
   onRetryCamera: () => void;
   cameraError: string | null;
   cameraReady: boolean;
+  /** The native film camera draws the picture behind the WebView; no web video is expected, so no loading overlay. */
+  nativePreview?: boolean;
   stream: MediaStream | null;
   ghostSettings?: GhostOverlaySettings;
   onUpdateGhostSettings?: (patch: Partial<GhostOverlaySettings>) => void;
@@ -118,6 +120,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
   onRetryCamera,
   cameraError,
   cameraReady = true,
+  nativePreview = false,
   stream,
   ghostSettings,
   onUpdateGhostSettings,
@@ -560,7 +563,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       )}
 
       {/* 1.25 CAMERA LOADING & INITIALIZATION INDICATOR */}
-      {!useSimulatedScene && (!stream || !cameraReady || !isVideoPlaying) && !cameraError && (
+      {!nativePreview && !useSimulatedScene && (!stream || !cameraReady || !isVideoPlaying) && !cameraError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 backdrop-blur-sm z-20 pointer-events-none">
           <div className="w-12 h-12 rounded-full border-2 border-amber-500/20 border-t-amber-400 animate-spin mb-3 shadow-lg shadow-amber-500/20" />
           <span className="text-xs font-mono font-bold tracking-widest text-amber-400">INITIALIZING OPTICAL SENSOR...</span>
@@ -569,7 +572,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       )}
 
       {/* 1.3 CAMERA ERROR / PERMISSION FALLBACK OVERLAY */}
-      {cameraError && !useSimulatedScene && (
+      {!nativePreview && cameraError && !useSimulatedScene && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/95 p-6 text-center z-20">
           <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-3">
             <AlertCircle size={26} />
@@ -761,7 +764,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       )}
 
       {/* 11. CAMERA PERMISSION ERROR BANNER (if any) */}
-      {cameraError && !useSimulatedScene && (
+      {!nativePreview && cameraError && !useSimulatedScene && (
         <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-40 flex flex-col items-center justify-center p-6 text-center text-white">
           <AlertCircle size={40} className="text-amber-400 mb-3" />
           <h3 className="text-lg font-bold mb-1">Camera Permission Required</h3>

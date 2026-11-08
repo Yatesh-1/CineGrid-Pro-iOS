@@ -153,7 +153,7 @@ public class NativeFilmCameraPlugin extends Plugin {
     @PluginMethod
     public void takePhoto(PluginCall call) {
         if (session == null) { call.reject("Native film camera is not running."); return; }
-        session.takePhoto(call);
+        session.takePhoto(call, call.getInt("orientation", -1));
     }
 
     /** setEv({ stops }) -> { evStops } (the value the camera really accepted, quantised to its step). */
@@ -231,10 +231,15 @@ public class NativeFilmCameraPlugin extends Plugin {
         session = null;
         if (s != null) s.stop();
         getActivity().runOnUiThread(() -> {
-            if (previewView != null) {
-                ViewGroup parent = (ViewGroup) previewView.getParent();
-                if (parent != null) parent.removeView(previewView);
-                previewView = null;
+            // Clear the field and detach the listener BEFORE removing the view: removing a TextureView calls
+            // onSurfaceTextureDestroyed, which calls stopSession again. Doing it the other way round recursed until the
+            // stack overflowed (device crash, seen on the first real app run).
+            final TextureView v = previewView;
+            previewView = null;
+            if (v != null) {
+                v.setSurfaceTextureListener(null);
+                ViewGroup parent = (ViewGroup) v.getParent();
+                if (parent != null) parent.removeView(v);
             }
             WebView webView = getBridge().getWebView();
             if (webView != null && webViewBackgroundSaved) {
@@ -340,6 +345,7 @@ public class NativeFilmCameraPlugin extends Plugin {
         private int program1;     // pass 1: copies the camera's external (YUV) texture once
         private int loc1Image;
         private int loc1StMat;
+        private int locFrameV;
         private int fbo;
         private int fboTex;
         private int fboW;
@@ -453,6 +459,7 @@ public class NativeFilmCameraPlugin extends Plugin {
             o.put("previewBuffer", previewSize.getWidth() + "x" + previewSize.getHeight());
             o.put("surface", surfW + "x" + surfH);
             o.put("sensorOrientation", sensorOrientation);
+            o.put("stMatrix", java.util.Arrays.toString(stMatrix));
             synchronized (statsLock) {
                 o.put("renderFps", Math.round(fpsRender * 10) / 10.0);
                 o.put("cameraFps", Math.round(fpsCamera * 10) / 10.0);
@@ -495,12 +502,16 @@ public class NativeFilmCameraPlugin extends Plugin {
             String vs = "attribute vec2 a_pos;\nvarying vec2 v_texCoord;\nvoid main(){gl_Position=vec4(a_pos,0.0,1.0);v_texCoord=vec2(a_pos.x*0.5+0.5,0.5-a_pos.y*0.5);}\n";
             String fs = readAsset("film_fragment.glsl");
             int vsId = compile(GLES20.GL_VERTEX_SHADER, vs);
+            // Pass 2 maps the surface onto the visible frame (aspect crop) inside the full image, so a 16:9 or 1:1 frame is cropped, not stretched.
+            String vsFilm = "attribute vec2 a_pos;\nuniform vec4 u_frameV;\nvarying vec2 v_texCoord;\nvoid main(){gl_Position=vec4(a_pos,0.0,1.0);vec2 f=vec2(a_pos.x*0.5+0.5,0.5-a_pos.y*0.5);v_texCoord=u_frameV.xy+f*u_frameV.zw;}\n";
+            int vsFilmId = compile(GLES20.GL_VERTEX_SHADER, vsFilm);
             String copyFs = "#extension GL_OES_EGL_image_external : require\nprecision mediump float;\nuniform samplerExternalOES u_image;\nuniform mat3 u_stMat;\nvarying vec2 v_texCoord;\nvoid main(){ vec3 p = u_stMat * vec3(v_texCoord.x, 1.0 - v_texCoord.y, 1.0); gl_FragColor = vec4(texture2D(u_image, p.xy).rgb, 1.0); }\n";
             program1 = link(vsId, compile(GLES20.GL_FRAGMENT_SHADER, copyFs));
             loc1Image = GLES20.glGetUniformLocation(program1, "u_image");
             loc1StMat = GLES20.glGetUniformLocation(program1, "u_stMat");
-            program = link(vsId, compile(GLES20.GL_FRAGMENT_SHADER, fs));
+            program = link(vsFilmId, compile(GLES20.GL_FRAGMENT_SHADER, fs));
             GLES20.glUseProgram(program);
+            locFrameV = GLES20.glGetUniformLocation(program, "u_frameV");
             for (int i = 0; i < uniformNames.length; i++) uniformLoc[i] = GLES20.glGetUniformLocation(program, uniformNames[i]);
 
             float[] verts = {-1, -1, 1, -1, -1, 1, 1, 1};
@@ -765,7 +776,8 @@ public class NativeFilmCameraPlugin extends Plugin {
 
         // ---- Still capture -----------------------------------------------------------------------------------
 
-        void takePhoto(PluginCall call) {
+        /** orientation: JPEG EXIF rotation in degrees (0/90/180/270); -1 = the camera's default for a portrait phone. */
+        void takePhoto(PluginCall call, int orientationOverride) {
             camHandler.post(() -> {
                 if (camera == null || capture == null || jpegReader == null) {
                     call.reject("The camera is not ready.");
@@ -793,7 +805,7 @@ public class NativeFilmCameraPlugin extends Plugin {
                     if (torchOn) b.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
                     b.set(CaptureRequest.JPEG_QUALITY, (byte) 95);
                     // Portrait phone: the EXIF orientation that makes the saved still upright.
-                    b.set(CaptureRequest.JPEG_ORIENTATION, front ? (sensorOrientation + 0) % 360 : sensorOrientation % 360);
+                    b.set(CaptureRequest.JPEG_ORIENTATION, orientationOverride >= 0 ? orientationOverride % 360 : jpegOrientation());
                     capture.capture(b.build(), new CameraCaptureSession.CaptureCallback() {
                         @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure f) {
                             PluginCall c = photoCall;
@@ -807,6 +819,11 @@ public class NativeFilmCameraPlugin extends Plugin {
                     if (c != null) c.reject("Could not start the photo capture: " + e.getMessage());
                 }
             });
+        }
+
+        /** EXIF rotation that makes a still upright for a portrait-held phone. */
+        private int jpegOrientation() {
+            return front ? (sensorOrientation + 0) % 360 : sensorOrientation % 360;
         }
 
         private void onStillAvailable(ImageReader reader) {
@@ -901,16 +918,22 @@ public class NativeFilmCameraPlugin extends Plugin {
             float[] stm = computeStMat();
             if (profile.active) {
                 // Pass 1: camera frame -> ordinary RGBA texture, once. Pass 2: film shader reads that cheap texture.
-                ensureFbo(w, h);
+                float[] fr = frameRect(w, h);
+                // The intermediate image holds the WHOLE upright frame; the visible crop is applied when pass 2 samples it.
+                int fh = Math.max(1, Math.round(h / fr[3]));
+                int fw = Math.max(1, Math.round(fh * ((float) previewSize.getHeight() / previewSize.getWidth())));
+                ensureFbo(fw, fh);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
-                GLES20.glViewport(0, 0, w, h);
+                GLES20.glViewport(0, 0, fw, fh);
                 drawCopy(stm);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
                 GLES20.glViewport(0, 0, w, h);
                 GLES20.glUseProgram(program);
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTex);
+                GLES20.glUniform4f(locFrameV, fr[0], fr[1], fr[2], fr[3]);
                 setUniforms();
+                GLES20.glUniform4f(uniformLoc[20], fr[0], fr[1], fr[2], fr[3]); // u_frame: effects sit on the visible frame
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
             } else {
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
@@ -946,20 +969,35 @@ public class NativeFilmCameraPlugin extends Plugin {
             GLES20.glUniform1f(L[16], 0f); // date imprint is not drawn by the spike
             GLES20.glUniform4f(L[17], 0, 0, 1, 1);
             GLES20.glUniform3f(L[18], 1, 1, 1);
-            GLES20.glUniform4f(L[20], 0, 0, 1, 1); // u_frame: whole image (the surface already has the frame's aspect)
             GLES20.glUniform1i(L[21], 0);
 
         }
 
         /** upright image uv (y up) -> camera buffer uv:  SurfaceTexture transform * sensor rotation * selfie mirror. */
+        /** Visible frame inside the upright image (x, y, w, h in 0..1): a centred aspect crop matching the view. */
+        private float[] frameRect(int viewW, int viewH) {
+            float imageAspect = (float) previewSize.getHeight() / previewSize.getWidth(); // upright w/h
+            float viewAspect = (float) viewW / viewH;
+            float fw = 1f, fh = 1f;
+            if (imageAspect > viewAspect) fw = viewAspect / imageAspect;
+            else fh = imageAspect / viewAspect;
+            return new float[]{(1 - fw) / 2f, (1 - fh) / 2f, fw, fh};
+        }
+
         private float[] computeStMat() {
             // upright uv (y up) -> camera buffer uv:  M = SurfaceTexture transform * rotation * mirror
             float[] mirror = front ? new float[]{-1, 0, 1, 0, 1, 0, 0, 0, 1} : new float[]{1, 0, 0, 0, 1, 0, 0, 0, 1};
+            // Some camera HALs (this OPPO included: measured transform [0,-1,..,-1,0,..,1,1]) already put the sensor rotation into
+            // the SurfaceTexture transform. Rotating again would double-count it and turn the picture, so only rotate
+            // here when the transform is a plain flip/crop (its x axis still maps to x).
+            final boolean transformHasRotation = Math.abs(stMatrix[0]) < 0.5f;
             float[] rot;
-            switch (sensorOrientation) {
-                case 90: rot = new float[]{0, 1, 0, -1, 0, 1, 0, 0, 1}; break;
+            if (transformHasRotation) {
+                rot = new float[]{1, 0, 0, 0, 1, 0, 0, 0, 1};
+            } else switch (sensorOrientation) {
+                case 90: rot = new float[]{0, -1, 1, 1, 0, 0, 0, 0, 1}; break;
                 case 180: rot = new float[]{-1, 0, 1, 0, -1, 1, 0, 0, 1}; break;
-                case 270: rot = new float[]{0, -1, 1, 1, 0, 0, 0, 0, 1}; break;
+                case 270: rot = new float[]{0, 1, 0, -1, 0, 1, 0, 0, 1}; break;
                 default: rot = new float[]{1, 0, 0, 0, 1, 0, 0, 0, 1};
             }
             float[] stAffine = {stMatrix[0], stMatrix[4], stMatrix[12], stMatrix[1], stMatrix[5], stMatrix[13], 0, 0, 1};

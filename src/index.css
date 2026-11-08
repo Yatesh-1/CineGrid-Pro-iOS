@@ -187,3 +187,19 @@
   );
   animation: zebraMove 1s linear infinite;
 }
+
+/* Native film camera: the picture is drawn by a native view BEHIND the WebView, so everything above it that would
+   paint an opaque background must be transparent while it runs. The web video/canvas are hidden (the web camera is
+   closed). Controls, grids and overlays are unaffected: only fully opaque black / app-background fills are cleared. */
+html.native-film,
+html.native-film body,
+html.native-film #root,
+html.native-film .bg-black,
+html.native-film .bg-\[\#050608\] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+html.native-film [data-testid="viewfinder-frame"] video,
+html.native-film [data-testid="viewfinder-frame"] canvas {
+  visibility: hidden;
+}
