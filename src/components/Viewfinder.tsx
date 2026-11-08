@@ -26,8 +26,6 @@ import { cameraService } from '../services/cameraService';
 import { WebGLLutPipeline } from '../utils/webglLutPipeline';
 import { cameraProfileStore } from '../services/cameraProfileStore';
 import { renderProbe } from '../utils/renderProbe';
-import { nextPreviewSide, PREVIEW_SIDE_MAX } from '../utils/adaptivePreview';
-
 import type { LookState, LutDefinition } from '../types/lut';
 import { Camera, RefreshCw, AlertCircle } from 'lucide-react';
 import { DualCameraViewportOverlay } from './dual/DualCameraViewportOverlay';
@@ -143,9 +141,6 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
   // WebGL 3D LUT Live Shader Pipeline
   const internalLutCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<WebGLLutPipeline | null>(null);
-  // Live preview size adapts to hold a smooth frame rate (see utils/adaptivePreview.ts).
-  const previewSideRef = useRef(PREVIEW_SIDE_MAX);
-  const lastAdaptRef = useRef(0);
 
   // Re-render (and re-apply the profile) whenever the user edits a camera profile.
   const profileRevision = useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
@@ -201,13 +196,9 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
         const vw = (sourceEl as HTMLVideoElement).videoWidth || (sourceEl as HTMLImageElement).naturalWidth || (sourceEl as any).width || 0;
         if (vw > 0) {
           const t0 = performance.now();
-          pipelineRef.current.renderFrame(sourceEl, lookState, activeLut, previewSideRef.current);
+          pipelineRef.current.renderFrame(sourceEl, lookState, activeLut);
           const t1 = performance.now();
           renderProbe.recordFrame(t1 - t0, t1);
-          if (t1 - lastAdaptRef.current > 2500) {
-            if (lastAdaptRef.current !== 0) previewSideRef.current = nextPreviewSide(renderProbe.snapshot(t1).fps, previewSideRef.current);
-            lastAdaptRef.current = t1;
-          }
           renderProbe.setContextStatus(pipelineRef.current.contextStatus);
           renderProbe.setGpuTimerAvailable(pipelineRef.current.gpuTimerAvailable);
         }
