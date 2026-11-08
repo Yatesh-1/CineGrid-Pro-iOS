@@ -84,8 +84,8 @@ float toneCh(float x) {
   if (u_fTone.w > 0.0) {
     float knee = 1.0 - 0.6 * u_fTone.w;
     if (y > knee) {
-      float k = (y - knee) / (1.0 - knee);
-      y = knee + (1.0 - knee) * (k / (1.0 + k));
+      float u = (y - knee) / (1.0 - knee);
+      y = knee + (1.0 - knee) * (u + u_fTone.w * u * u * (1.0 - u));
     }
   }
   return u_fTone.y + y * (1.0 - u_fTone.y);

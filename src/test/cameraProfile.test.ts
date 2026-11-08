@@ -36,8 +36,17 @@ describe('cameraProfile model', () => {
     }
     expect(applyToneCurve(0, { ...NEUTRAL_PROFILE.tone, shadowLift: 0.1 })).toBeCloseTo(0.1, 10);
     expect(applyToneCurve(0.02, { ...NEUTRAL_PROFILE.tone, blackPoint: 0.05 })).toBe(0);
-    // shoulder compresses highlights below the input value
-    expect(applyToneCurve(0.98, { ...NEUTRAL_PROFILE.tone, highlightRolloff: 1 })).toBeLessThan(0.98);
+    // white stays white at any roll-off (the old shoulder mapped 1.0 to ~0.7, greying the highlights)
+    for (const r of [0, 0.3, 0.75, 1]) expect(applyToneCurve(1, { ...NEUTRAL_PROFILE.tone, highlightRolloff: r })).toBeCloseTo(1, 10);
+    // the shoulder flattens the top end: much less output change per input change near white than at the knee
+    const sh = { ...NEUTRAL_PROFILE.tone, highlightRolloff: 1 };
+    const nearWhite = applyToneCurve(1, sh) - applyToneCurve(0.97, sh);
+    expect(nearWhite).toBeLessThan(0.03 * 0.3);
+    // and it is continuous with the straight part (no visible kink at the knee)
+    const knee = 1 - 0.6;
+    const slopeBelow = (applyToneCurve(knee, sh) - applyToneCurve(knee - 0.001, sh)) / 0.001;
+    const slopeAbove = (applyToneCurve(knee + 0.001, sh) - applyToneCurve(knee, sh)) / 0.001;
+    expect(Math.abs(slopeAbove - slopeBelow)).toBeLessThan(0.02);
   });
 
   it('vignette darkens corners more than centre and respects amount', () => {

@@ -331,8 +331,9 @@ export function applyToneCurve(x: number, t: CameraProfile['tone']): number {
   if (t.highlightRolloff > 0) {
     const knee = 1 - 0.6 * t.highlightRolloff;
     if (y > knee) {
-      const k = (y - knee) / (1 - knee);
-      y = knee + (1 - knee) * (k / (1 + k));
+      // C1 at the knee (slope 1) and f(1) = 1, so white stays white; slope at white falls to 1 - rolloff.
+      const u = (y - knee) / (1 - knee);
+      y = knee + (1 - knee) * (u + t.highlightRolloff * u * u * (1 - u));
     }
   }
   return t.shadowLift + y * (1 - t.shadowLift);
