@@ -9,7 +9,8 @@ import type {
 } from '../../types/lut';
 import { BUILTIN_LOOK_FILTERS } from '../../data/filterLibrary';
 import { lutStorageService } from '../../services/lutStorageService';
-import { exportLookAsCube } from '../../utils/cubeParser';
+import { exportLookAsCube, parseCubeFile } from '../../utils/cubeParser';
+import { shareTextFile } from '../../services/shareService';
 import { CameraProfilePanel } from './CameraProfilePanel';
 import { parseCubeFileAsync } from '../../utils/cubeParserAsync';
 import { convert3dlToCube } from '../../utils/lut3dlConverter';
@@ -202,21 +203,26 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
     setRenamingLutId(null);
   };
 
-  // Export current grade as a standard .CUBE file
-  const handleExportGradeAsCube = () => {
+  // Export current grade as a standard .CUBE file. The file is really written (app cache) and handed to the share
+  // sheet; success is reported only after that happened. A plain blob download is silently ignored by Android's
+  // WebView, which is how this used to report success with no file.
+  const handleExportGradeAsCube = async () => {
+    setImportError(null);
+    setImportSuccess(null);
     const title = activeLut ? `${activeLut.name} Custom Grade` : 'CineGrid Custom Grade';
-    const cubeText = exportLookAsCube(lookState, activeLut, title);
-    const blob = new Blob([cubeText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}_33x.cube`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const fileName = `${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}_33x.cube`;
+    try {
+      const cubeText = exportLookAsCube(lookState, activeLut, title);
+      // Never hand out a file that would not load again.
+      const check = parseCubeFile(cubeText, title);
+      if (!check.success || check.details?.size !== 33) throw new Error(check.error || 'the generated LUT is not valid');
+      const result = await shareTextFile(fileName, cubeText, 'text/plain', 'CineGrid LUT');
+      if (result === 'shared') setImportSuccess(`Choose where to save “${fileName}”.`);
+      else setImportSuccess('Export cancelled. Nothing was saved.');
+    } catch (err) {
+      setImportError(`LUT export failed: ${(err as Error)?.message || 'could not write the file'}.`);
+    }
   };
-
   // Save current look as a preset
   const handleSavePreset = () => {
     if (!savePresetName.trim()) return;
