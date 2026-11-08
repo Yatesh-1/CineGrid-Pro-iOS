@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e5a93c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M12 2v20M2 12h20'/></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#050608" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>CineGrid Pro - Composition Camera & Manual Controls</title>
+    <style>
+      /* Dark from the very first paint: no white flash while the app's code loads */
+      html, body { background: #050608; margin: 0; }
+    </style>
+    <script>
+      // Opening the camera is the slowest part of starting up (1-3 s). Ask for it now, while the app's JavaScript is
+      // still loading; the app picks this stream up (see cameraService.takeEarlyStream) instead of asking again.
+      (function () {
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+          window.__earlyCam = navigator.mediaDevices
+            .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
+            .catch(function () { return null; });
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#050608] text-white overflow-hidden select-none">
+    <!-- Green/magenta tint: matrix values are rewritten at runtime by utils/tintFilter.ts. Identity by default. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <filter id="cg-tint" color-interpolation-filters="sRGB">
+        <feColorMatrix id="cg-tint-matrix" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0" />
+      </filter>
+    </svg>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

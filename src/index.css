@@ -1,0 +1,189 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  
+  /* Adapt to every screen: all rem-based sizes (text, padding, buttons) follow the real viewport. The smaller of the
+     width-based and height-based size wins, so a short phone shrinks the controls to leave room for the picture and
+     a big or tall phone gets proportionally larger, readable controls (never below 13px or above 19px per rem). */
+  html {
+    font-size: clamp(13px, min(4vw, 2.05vh), 19px);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #050608;
+    color: #f3f4f6;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+}
+
+/* Numbers line up in readouts (ISO, shutter, timecode, zoom) */
+.font-mono,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Photo capture: a short dim "blink" of the viewfinder, like a phone camera */
+@keyframes cg-shutter-blink {
+  0% { opacity: 0; }
+  35% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+.cg-shutter-blink {
+  animation: cg-shutter-blink 170ms ease-out both;
+}
+
+/* The newest photo's thumbnail pops into the gallery button */
+@keyframes cg-thumb-pop {
+  0% { transform: scale(0.55); opacity: 0.2; }
+  60% { transform: scale(1.14); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.cg-thumb-pop {
+  animation: cg-thumb-pop 380ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+/* Respect the phone's "remove animations" setting */
+@media (prefers-reduced-motion: reduce) {
+  .cg-shutter-blink,
+  .cg-thumb-pop {
+    animation: none;
+  }
+}
+
+/* Hide scrollbars for slick mobile UI while maintaining scrollability */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Tick dial ruler effect */
+.tick-dial {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.4) 0px,
+    rgba(255, 255, 255, 0.4) 1px,
+    transparent 1px,
+    transparent 12px
+  );
+}
+
+.tick-dial-major {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.7) 0px,
+    rgba(255, 255, 255, 0.7) 2px,
+    transparent 2px,
+    transparent 48px
+  );
+}
+
+/* Glassmorphism effects */
+.glass-panel {
+  background: rgba(18, 20, 26, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/*
+ * Mobile Safe Area and Notch Inset Support for iOS & Android.
+ * env(safe-area-inset-*) covers notches/cutouts (and iOS bars) but in Android's WebView it is 0 for the
+ * navigation bar. Capacitor publishes the real system-bar sizes as --safe-area-inset-*, so use whichever is larger;
+ * otherwise bottom controls sit underneath the on-screen navigation buttons.
+ */
+:root {
+  --cg-inset-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --cg-inset-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --cg-inset-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --cg-inset-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+}
+.safe-top {
+  padding-top: var(--cg-inset-top);
+}
+.safe-bottom {
+  padding-bottom: var(--cg-inset-bottom);
+}
+.safe-left {
+  padding-left: var(--cg-inset-left);
+}
+.safe-right {
+  padding-right: var(--cg-inset-right);
+}
+.safe-area-container {
+  padding-top: var(--cg-inset-top);
+  padding-bottom: var(--cg-inset-bottom);
+  padding-left: var(--cg-inset-left);
+  padding-right: var(--cg-inset-right);
+}
+/* The container already clears the bars: elements inside it must not add the inset a second time */
+.safe-area-container .safe-bottom {
+  padding-bottom: 0;
+}
+/* ...but full-screen layers (gallery, studio, sheets, dialogs) are position:fixed, so the container's padding does not
+   reach them and the rule above also zeroed their own bottom padding: their last row ended up under the phone's
+   navigation buttons (Home / Back). A transparent bottom border takes the inset out of their content box while their
+   dark background still paints behind it. */
+.fixed.inset-0.z-50 {
+  border-bottom: var(--cg-inset-bottom, 0px) solid transparent;
+}
+
+.glass-pill {
+  background: rgba(24, 27, 36, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.glass-button {
+  background: rgba(30, 34, 45, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: all 0.15s ease;
+}
+
+.glass-button:active {
+  transform: scale(0.95);
+  background: rgba(45, 52, 68, 0.85);
+}
+
+/* Animations */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s infinite ease-in-out;
+}
+
+/* Zebra stripes animation for overexposure indicator */
+@keyframes zebraMove {
+  0% { background-position: 0 0; }
+  100% { background-position: 28px 0; }
+}
+
+.zebra-stripes {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.5),
+    rgba(255, 255, 255, 0.5) 7px,
+    transparent 7px,
+    transparent 14px
+  );
+  animation: zebraMove 1s linear infinite;
+}

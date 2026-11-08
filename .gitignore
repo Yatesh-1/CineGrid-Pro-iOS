@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# License server runtime data: contains the signing secret, admin hash and license keys. Never commit.
+server/data/
+# Backups can embed server/data; keep them out of version control and distribution.
+backups/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+android/keystore.properties
+*.jks
+*.keystore
+
+android/local.properties
+
+# Built binaries
+*.apk
+*.aab
+export/
