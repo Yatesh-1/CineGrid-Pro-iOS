@@ -110,10 +110,11 @@ describe('Look studio rows', () => {
     }
   });
 
-  it('shows the three tabs as one equal-width row', () => {
+  it('shows the four tabs (Cameras, LUTs, Filters, Adjustments) as one equal-width row', () => {
     render(<LookStudioModal {...props} />);
     const row = screen.getByRole('tablist');
-    expect(row.className).toContain('grid-cols-3');
+    expect(row.className).toContain('grid-cols-4');
+    expect(screen.getAllByRole('tab').length).toBe(4);
     fireEvent.click(screen.getByText('Adjustments'));
     expect(screen.getByText('Precision Manual Controls')).toBeInTheDocument();
   });

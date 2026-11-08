@@ -69,7 +69,7 @@ export const DEFAULT_COLOR_ADJUSTMENTS: ColorAdjustments = {
   sharpening: 0,
 };
 
-export type LookTab = 'filters' | 'luts' | 'adjustments';
+export type LookTab = 'filters' | 'luts' | 'adjustments' | 'cameras';
 
 export interface LookState {
   activeLutId: string | null;
@@ -79,6 +79,8 @@ export interface LookState {
   adjustments: ColorAdjustments;
   isCompareActive: boolean; // Before / After split or hold
   compareSplitPosition: number; // 0 to 100 percentage
+  /** Active virtual camera (utils/cameraProfile.ts). Undefined/null = no camera rendering. */
+  cameraProfileId?: string | null;
 }
 
 export const DEFAULT_LOOK_STATE: LookState = {

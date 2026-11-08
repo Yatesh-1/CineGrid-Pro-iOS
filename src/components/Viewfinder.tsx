@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useSyncExternalStore } from 'react';
 import type {
   AspectRatio,
   CameraFilter,
@@ -24,6 +24,7 @@ import { ExposureBiasSlider } from './camera/ExposureBiasSlider';
 import { LONG_PRESS_MS, LONG_PRESS_SLOP, sliderSide } from '../utils/exposureBias';
 import { cameraService } from '../services/cameraService';
 import { WebGLLutPipeline } from '../utils/webglLutPipeline';
+import { cameraProfileStore } from '../services/cameraProfileStore';
 import type { LookState, LutDefinition } from '../types/lut';
 import { Camera, RefreshCw, AlertCircle } from 'lucide-react';
 import { DualCameraViewportOverlay } from './dual/DualCameraViewportOverlay';
@@ -140,7 +141,12 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
   const internalLutCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<WebGLLutPipeline | null>(null);
 
+  // Re-render (and re-apply the profile) whenever the user edits a camera profile.
+  const profileRevision = useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
+  const activeCameraProfile = cameraProfileStore.get(lookState?.cameraProfileId);
+
   const isLutActive = Boolean(
+    activeCameraProfile ||
     (lookState?.activeLutId && activeLut && lookState.lutIntensity > 0) ||
     (lookState && (
       lookState.adjustments.exposure !== 0 ||
@@ -162,6 +168,8 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       pipelineRef.current = new WebGLLutPipeline(canvas);
     }
 
+    // Applies the selected virtual camera (or clears it) before frames are drawn.
+    pipelineRef.current.setFilmProfile(cameraProfileStore.get(lookState?.cameraProfileId));
     if (!isLutActive) return;
 
     let isRunning = true;
@@ -210,7 +218,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
         (video as any).cancelVideoFrameCallback(videoCallbackId);
       }
     };
-  }, [isLutActive, lookState, activeLut, useSimulatedScene, videoRef, imageRef, lutCanvasRef]);
+  }, [isLutActive, lookState, activeLut, useSimulatedScene, videoRef, imageRef, lutCanvasRef, profileRevision]);
 
   useEffect(() => {
     return () => {

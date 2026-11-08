@@ -63,6 +63,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import type { PhotographySession } from './types/session';
 import { type GhostOverlaySettings, DEFAULT_GHOST_SETTINGS } from './types/ghost';
 import { type LookState, DEFAULT_LOOK_STATE, type LutDefinition } from './types/lut';
+import { cameraProfileStore } from './services/cameraProfileStore';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
 import { FeatureRail } from './components/camera/FeatureRail';
@@ -390,7 +391,7 @@ export function App() {
   const [lookState, setLookState] = useState<LookState>(() => {
     try {
       const saved = localStorage.getItem('cinegrid_look_state');
-      return saved ? JSON.parse(saved) : DEFAULT_LOOK_STATE;
+      return saved ? { ...DEFAULT_LOOK_STATE, ...JSON.parse(saved) } : DEFAULT_LOOK_STATE;
     } catch {
       return DEFAULT_LOOK_STATE;
     }
@@ -1384,6 +1385,7 @@ export function App() {
     const tempSettings = evOffset !== 0 ? { ...previewPro, ev: previewPro.ev + evOffset } : previewPro;
 
     const isLutActive = Boolean(
+      (lookState?.cameraProfileId && cameraProfileStore.get(lookState.cameraProfileId)) ||
       (lookState?.activeLutId && activeLut && lookState.lutIntensity > 0) ||
       (lookState && (
         lookState.adjustments.exposure !== 0 ||
@@ -1953,6 +1955,7 @@ export function App() {
   const gradedRecordingStream = (source: MediaStream, fps: number): MediaStream => {
     const canvas = lutCanvasRef.current;
     const lookOn = Boolean(
+      (lookState.cameraProfileId && cameraProfileStore.get(lookState.cameraProfileId)) ||
       (lookState.activeLutId && activeLut && lookState.lutIntensity > 0) ||
         Object.values(lookState.adjustments).some((v) => v !== 0)
     );

@@ -9,6 +9,7 @@ import type {
 import { BUILTIN_LOOK_FILTERS } from '../../data/filterLibrary';
 import { lutStorageService } from '../../services/lutStorageService';
 import { exportLookAsCube } from '../../utils/cubeParser';
+import { CameraProfilePanel } from './CameraProfilePanel';
 import { parseCubeFileAsync } from '../../utils/cubeParserAsync';
 import { convert3dlToCube } from '../../utils/lut3dlConverter';
 import {
@@ -28,6 +29,7 @@ import {
   Split,
   AlertCircle,
   FileText,
+  Camera,
 } from 'lucide-react';
 
 interface LookStudioModalProps {
@@ -327,8 +329,23 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
         </div>
 
         {/* 2. Compact Tabs: Filters | LUTs | Adjustments */}
-        <div role="tablist" className="grid grid-cols-3 gap-1.5 px-4 py-2 border-b border-white/10 text-xs font-semibold">
+        <div role="tablist" className="grid grid-cols-4 gap-1.5 px-4 py-2 border-b border-white/10 text-xs font-semibold">
           <button
+            role="tab"
+            aria-selected={activeTab === 'cameras'}
+            onClick={() => setActiveTab('cameras')}
+            className={`h-9 min-w-0 rounded-full flex items-center justify-center gap-1 transition-colors ${
+              activeTab === 'cameras'
+                ? 'bg-amber-400 text-black'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+            }`}
+          >
+            <Camera size={13} aria-hidden="true" />
+            <span>Cameras</span>
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === 'luts'}
             onClick={() => setActiveTab('luts')}
             className={`h-9 min-w-0 rounded-full flex items-center justify-center gap-1.5 transition-colors ${
               activeTab === 'luts'
@@ -341,6 +358,8 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
           </button>
 
           <button
+            role="tab"
+            aria-selected={activeTab === 'filters'}
             onClick={() => setActiveTab('filters')}
             className={`h-9 min-w-0 rounded-full flex items-center justify-center gap-1.5 transition-colors ${
               activeTab === 'filters'
@@ -353,6 +372,8 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
           </button>
 
           <button
+            role="tab"
+            aria-selected={activeTab === 'adjustments'}
             onClick={() => setActiveTab('adjustments')}
             className={`h-9 min-w-0 rounded-full flex items-center justify-center gap-1.5 transition-colors ${
               activeTab === 'adjustments'
@@ -392,6 +413,10 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
 
         {/* 4. Tab Body Area */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {activeTab === 'cameras' && (
+            <CameraProfilePanel lookState={lookState} onChangeLookState={onChangeLookState} />
+          )}
+
           {/* ================= TAB 1: 3D LUTS ================= */}
           {activeTab === 'luts' && (
             <div className="space-y-3">
