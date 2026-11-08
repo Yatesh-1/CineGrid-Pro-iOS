@@ -1,4 +1,4 @@
-import './utils/resetOnLaunch' // first: every launch starts from defaults (see the file)
+import './utils/resetOnLaunch' // first: clears only the stale active-session marker; settings persist (see the file)
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

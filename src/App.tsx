@@ -67,6 +67,7 @@ import { cameraProfileStore } from './services/cameraProfileStore';
 import { renderLookStill } from './utils/renderLookStill';
 import { renderProbe } from './utils/renderProbe';
 import { useNativeFilmCamera } from './hooks/useNativeFilmCamera';
+import { loadPrefs, savePrefs } from './utils/uiPrefs';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
 import { FeatureRail } from './components/camera/FeatureRail';
@@ -217,7 +218,8 @@ export function App() {
   });
 
   const [selectedCategory, setSelectedCategory] = useState<GridCategory>('all');
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('4:3');
+  // Settings that used to reset on every restart are restored from validated saved preferences (utils/uiPrefs.ts).
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(() => loadPrefs().aspectRatio ?? '4:3');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
 
   // Smart Subject Framing Guide state
@@ -253,8 +255,11 @@ export function App() {
   });
 
   // Filter state
-  const [selectedFilter, setSelectedFilter] = useState<CameraFilter>(CAMERA_FILTERS[1]); // Portra 400
-  const [filterStrength, setFilterStrength] = useState<number>(85);
+  const [selectedFilter, setSelectedFilter] = useState<CameraFilter>(() => {
+    const id = loadPrefs(undefined, CAMERA_FILTERS.map((f) => f.id)).filterId;
+    return CAMERA_FILTERS.find((f) => f.id === id) ?? CAMERA_FILTERS[1]; // default: Portra 400
+  });
+  const [filterStrength, setFilterStrength] = useState<number>(() => loadPrefs().filterStrength ?? 85);
 
   // Pro settings state with separate Photo and Video persistence
   const [proSettings, setProSettings] = useState<ProSettings>(() => {
@@ -280,7 +285,7 @@ export function App() {
   const [galleryToast, setGalleryToast] = useState<string | null>(null);
   // Native Camera2 capabilities (Android): decide which still formats / multi-frame modes are really available
   const [nativeCaps, setNativeCaps] = useState<NativeCapabilities | null>(null);
-  const [hdrEnabled, setHdrEnabled] = useState(false);
+  const [hdrEnabled, setHdrEnabled] = useState(() => loadPrefs().hdr ?? false);
   useEffect(() => {
     loadNativeCapabilities().then((c) => {
       hardwareIntelligenceService.applyNativeSpecs(c); // real focal length / aperture / OIS instead of guesses
@@ -291,7 +296,7 @@ export function App() {
   // Live scopes (histogram, waveform) render inside the Pro > Monitoring tab, never on the picture or the main rail
   const [scopesHost, setScopesHost] = useState<HTMLDivElement | null>(null);
   const [traySheet, setTraySheet] = useState<'grid' | 'look' | null>(null);
-  const [selectedTimer, setSelectedTimer] = useState<number>(0);
+  const [selectedTimer, setSelectedTimer] = useState<number>(() => loadPrefs().timer ?? 0);
   // Front camera mirroring: the preview and the saved photo agree (what you see is what you get).
   const [mirrorFront, setMirrorFront] = useState<boolean>(() => {
     try {
@@ -1289,7 +1294,10 @@ export function App() {
   };
 
   // Flash mode like other camera apps: Off, Auto (fires only for a dark photo), On (torch stays lit)
-  const [flashMode, setFlashMode] = useState<'off' | 'auto' | 'on'>('off');
+  const [flashMode, setFlashMode] = useState<'off' | 'auto' | 'on'>(() => loadPrefs().flashMode ?? 'off');
+  useEffect(() => {
+    savePrefs({ aspectRatio, filterId: selectedFilter.id, filterStrength, timer: selectedTimer, hdr: hdrEnabled, flashMode });
+  }, [aspectRatio, selectedFilter, filterStrength, selectedTimer, hdrEnabled, flashMode]);
   const handleToggleTorch = async () => {
     const track = stream?.getVideoTracks()[0];
     const caps = (track?.getCapabilities ? track.getCapabilities() : {}) as { torch?: boolean };

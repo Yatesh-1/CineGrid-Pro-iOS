@@ -22,6 +22,7 @@ import android.opengl.EGL14;
 import android.opengl.EGLConfig;
 import android.opengl.EGLContext;
 import android.opengl.EGLDisplay;
+import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
@@ -188,6 +189,20 @@ public class NativeFilmCameraPlugin extends Plugin {
         if (!session.setAwb(mode)) { call.reject("This camera does not support the white-balance mode '" + mode + "'."); return; }
         call.resolve();
     }
+    /** startRecording({ audio: true }) -> { path, width, height } */
+    @PluginMethod
+    public void startRecording(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        session.startRecording(call, !Boolean.FALSE.equals(call.getBoolean("audio", true)), call.getInt("height", 1440));
+    }
+
+    /** stopRecording() -> measured result of the file that was really written */
+    @PluginMethod
+    public void stopRecording(PluginCall call) {
+        if (session == null) { call.reject("Native film camera is not running."); return; }
+        session.stopRecording(call);
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
         stopSession();
@@ -341,11 +356,25 @@ public class NativeFilmCameraPlugin extends Plugin {
         private EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
         private EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
         private EGLSurface eglSurface = EGL14.EGL_NO_SURFACE;
+        private EGLConfig eglConfig;
+        private EGLSurface encSurface = EGL14.EGL_NO_SURFACE;
+        private NativeFilmRecorder recorder;
+        private volatile boolean recording;
+        // Recording size (upright 3:4). Chosen per recording; defaults to 1080x1440.
+        private int recW = 1080;
+        private int recH = 1440;
         private int program;      // pass 2: film shader, reads an ordinary RGBA texture
         private int program1;     // pass 1: copies the camera's external (YUV) texture once
         private int loc1Image;
         private int loc1StMat;
         private int locFrameV;
+        private int program3;     // plain copy of an RGBA texture (used to feed the screen and the encoder from one film render)
+        private int loc3Image;
+        private int loc3FrameV;
+        private int fbo2;
+        private int fbo2Tex;
+        private int fbo2W;
+        private int fbo2H;
         private int fbo;
         private int fboTex;
         private int fboW;
@@ -366,6 +395,7 @@ public class NativeFilmCameraPlugin extends Plugin {
         private Size jpegSize = new Size(0, 0);
         private volatile PluginCall photoCall;
         private Range<Integer> fpsRange;
+        private Range<Integer>[] allFpsRanges;
         private float evStep = 0f;
         private Range<Integer> evRange = new Range<>(0, 0);
         private int evIndex = 0;
@@ -436,6 +466,12 @@ public class NativeFilmCameraPlugin extends Plugin {
 
         void stop() {
             running = false;
+            if (recording && recorder != null) {
+                recording = false;
+                final NativeFilmRecorder dying = recorder;
+                recorder = null;
+                try { dying.finish(); } catch (Exception ignored) { }
+            }
             state = "stopped";
             if (glHandler == null) return;
             // Close the camera first so no more frames arrive, then tear GL down on its own thread.
@@ -460,6 +496,8 @@ public class NativeFilmCameraPlugin extends Plugin {
             o.put("surface", surfW + "x" + surfH);
             o.put("sensorOrientation", sensorOrientation);
             o.put("stMatrix", java.util.Arrays.toString(stMatrix));
+            o.put("aeFpsRange", fpsRange == null ? "default" : fpsRange.getLower() + "-" + fpsRange.getUpper());
+            o.put("aeFpsRangesAvailable", allFpsRanges == null ? "" : java.util.Arrays.toString(allFpsRanges));
             synchronized (statsLock) {
                 o.put("renderFps", Math.round(fpsRender * 10) / 10.0);
                 o.put("cameraFps", Math.round(fpsCamera * 10) / 10.0);
@@ -493,6 +531,7 @@ public class NativeFilmCameraPlugin extends Plugin {
             int[] num = new int[1];
             EGL14.eglChooseConfig(eglDisplay, attribs, 0, configs, 0, 1, num, 0);
             if (num[0] == 0) throw new IllegalStateException("no EGL config");
+            eglConfig = configs[0];
             int[] ctxAttribs = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE};
             eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, ctxAttribs, 0);
             eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0], outSurface, new int[]{EGL14.EGL_NONE}, 0);
@@ -509,6 +548,10 @@ public class NativeFilmCameraPlugin extends Plugin {
             program1 = link(vsId, compile(GLES20.GL_FRAGMENT_SHADER, copyFs));
             loc1Image = GLES20.glGetUniformLocation(program1, "u_image");
             loc1StMat = GLES20.glGetUniformLocation(program1, "u_stMat");
+            String copy2d = "precision mediump float;\nuniform sampler2D u_image;\nvarying vec2 v_texCoord;\nvoid main(){ gl_FragColor = vec4(texture2D(u_image, vec2(v_texCoord.x, 1.0 - v_texCoord.y)).rgb, 1.0); }\n";
+            program3 = link(vsFilmId, compile(GLES20.GL_FRAGMENT_SHADER, copy2d));
+            loc3Image = GLES20.glGetUniformLocation(program3, "u_image");
+            loc3FrameV = GLES20.glGetUniformLocation(program3, "u_frameV");
             program = link(vsFilmId, compile(GLES20.GL_FRAGMENT_SHADER, fs));
             GLES20.glUseProgram(program);
             locFrameV = GLES20.glGetUniformLocation(program, "u_frameV");
@@ -602,10 +645,11 @@ public class NativeFilmCameraPlugin extends Plugin {
                 sensorOrientation = so == null ? 90 : so;
                 StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
                 previewSize = pickPreviewSize(map.getOutputSizes(SurfaceTexture.class));
-                final Range<Integer> fps = pickFps(cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES));
+                final Range<Integer> fps = pickFps(cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES), true);
                 final CameraCharacteristics ccf = cc;
                 characteristics = cc;
                 fpsRange = fps;
+                allFpsRanges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
                 jpegSize = pickStillSize(map.getOutputSizes(ImageFormat.JPEG));
                 if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) != null) evStep = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP).floatValue();
                 if (cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) != null) evRange = cc.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
@@ -901,17 +945,40 @@ public class NativeFilmCameraPlugin extends Plugin {
             return best != null ? best : sizes[0];
         }
 
-        /** Prefer a 30 fps ceiling with a low floor (so low light can lengthen exposure without halving the rate). */
-        private static Range<Integer> pickFps(Range<Integer>[] ranges) {
+        /**
+         * AE target range from what the camera lists. The session requests the STEADY range from the start (measured on the
+         * test phone: with [5,30] the camera dropped to 12.5 fps in a dim room, and switching ranges mid-session had no effect;
+         * with [30,30] it held 29.4-29.9 fps, like the stock camera). Video wants a steady rate (a fixed 30..30 if offered, else the
+         * highest floor under a 30 ceiling): with a low floor auto-exposure drops to ~12 fps in dim light, which is
+         * what limited the first recording. Preview keeps a floor of at most 15 so low light can still brighten.
+         */
+        private static Range<Integer> pickFps(Range<Integer>[] ranges, boolean steady) {
             if (ranges == null || ranges.length == 0) return null;
             Range<Integer> best = null;
             for (Range<Integer> r : ranges) {
                 if (r.getUpper() > 30) continue;
-                if (best == null || r.getUpper() > best.getUpper() || (r.getUpper().equals(best.getUpper()) && r.getLower() < best.getLower() && r.getLower() >= 15)) best = r;
+                if (best == null) { best = r; continue; }
+                if (r.getUpper() > best.getUpper()) { best = r; continue; }
+                if (!r.getUpper().equals(best.getUpper())) continue;
+                if (steady) { if (r.getLower() > best.getLower()) best = r; }
+                else {
+                    // closest floor to 15 without going above it
+                    int cur = best.getLower(), cand = r.getLower();
+                    boolean curOk = cur <= 15, candOk = cand <= 15;
+                    if (candOk && (!curOk || cand > cur)) best = r;
+                    else if (!candOk && !curOk && cand < cur) best = r;
+                }
             }
             return best != null ? best : ranges[0];
         }
 
+        private void setFpsRange(boolean steady) {
+            Range<Integer> r = pickFps(allFpsRanges, steady);
+            if (r == null || previewBuilder == null) return;
+            fpsRange = r;
+            previewBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, r);
+            camHandler.post(this::applyRepeating);
+        }
         // ---- Render ------------------------------------------------------------------------------------------
 
         private void renderFrame() {
@@ -928,17 +995,31 @@ public class NativeFilmCameraPlugin extends Plugin {
             int w = surfW > 0 ? surfW : 720;
             int h = surfH > 0 ? surfH : 960;
             float[] stm = computeStMat();
+            final boolean rec = recording && recorder != null && encSurface != EGL14.EGL_NO_SURFACE;
             if (profile.active) {
                 // Pass 1: camera frame -> ordinary RGBA texture, once. Pass 2: film shader reads that cheap texture.
                 float[] fr = frameRect(w, h);
                 // The intermediate image holds the WHOLE upright frame; the visible crop is applied when pass 2 samples it.
                 int fh = Math.max(1, Math.round(h / fr[3]));
                 int fw = Math.max(1, Math.round(fh * ((float) previewSize.getHeight() / previewSize.getWidth())));
+                if (rec) { fw = recW; fh = recH; } // record from a full-size intermediate so the file is not upscaled from the preview
                 ensureFbo(fw, fh);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
                 GLES20.glViewport(0, 0, fw, fh);
                 drawCopy(stm);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                if (rec) {
+                    // Film look rendered ONCE at recording size, then copied to the encoder and the screen: running the
+                    // shader twice cost ~50 ms/frame at 1080x1440 on this phone.
+                    renderFilmToFbo2(fboTex);
+                    encodeFromTexture(fbo2Tex);
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                    drawTexture(fbo2Tex, fr, w, h);
+                    EGL14.eglSwapBuffers(eglDisplay, eglSurface);
+                    long tr = System.nanoTime();
+                    recordFrame((tr - t0) / 1e6, tr);
+                    return;
+                }
                 GLES20.glViewport(0, 0, w, h);
                 GLES20.glUseProgram(program);
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -949,12 +1030,177 @@ public class NativeFilmCameraPlugin extends Plugin {
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
             } else {
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                if (rec) encodeFrame(stm);
                 GLES20.glViewport(0, 0, w, h);
                 drawCopy(stm); // unprocessed feed: a single pass straight to the screen
-            }
-            EGL14.eglSwapBuffers(eglDisplay, eglSurface);
+            }            EGL14.eglSwapBuffers(eglDisplay, eglSurface);
             long t1 = System.nanoTime();
             recordFrame((t1 - t0) / 1e6, t1);
+        }
+
+        // ---- Recording -----------------------------------------------------------------------------------------
+
+        private void ensureFbo2(int w, int h) {
+            if (fbo2Tex != 0 && fbo2W == w && fbo2H == h) return;
+            if (fbo2Tex != 0) {
+                GLES20.glDeleteTextures(1, new int[]{fbo2Tex}, 0);
+                GLES20.glDeleteFramebuffers(1, new int[]{fbo2}, 0);
+            }
+            int[] t = new int[1];
+            GLES20.glGenTextures(1, t, 0);
+            fbo2Tex = t[0];
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fbo2Tex);
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            int[] f = new int[1];
+            GLES20.glGenFramebuffers(1, f, 0);
+            fbo2 = f[0];
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo2);
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, fbo2Tex, 0);
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) fail("Recording framebuffer is incomplete.");
+            fbo2W = w;
+            fbo2H = h;
+        }
+
+        /** Film shader over the whole upright frame at recording size. */
+        private void renderFilmToFbo2(int srcTex) {
+            ensureFbo2(recW, recH);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo2);
+            GLES20.glViewport(0, 0, recW, recH);
+            GLES20.glUseProgram(program);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTex);
+            GLES20.glUniform4f(locFrameV, 0, 0, 1, 1);
+            setUniforms();
+            GLES20.glUniform4f(uniformLoc[20], 0, 0, 1, 1); // the file is exactly the 3:4 upright frame
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        private void drawTexture(int tex, float[] frame, int vw, int vh) {
+            GLES20.glViewport(0, 0, vw, vh);
+            GLES20.glUseProgram(program3);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex);
+            GLES20.glUniform1i(loc3Image, 0);
+            GLES20.glUniform4f(loc3FrameV, frame[0], frame[1], frame[2], frame[3]);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        /** Copies the already film-processed texture into the encoder surface and stamps it on the recorder's clock. */
+        private void encodeFromTexture(int tex) {
+            try {
+                EGL14.eglMakeCurrent(eglDisplay, encSurface, encSurface, eglContext);
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                drawTexture(tex, new float[]{0, 0, 1, 1}, recW, recH);
+                long pts = recorder.nowNs();
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, encSurface, pts);
+                EGL14.eglSwapBuffers(eglDisplay, encSurface);
+                recorder.onVideoFrame(pts);
+            } catch (Exception e) {
+                android.util.Log.w(TAG, "encode frame failed: " + e.getMessage());
+            } finally {
+                EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
+            }
+        }
+
+        /** Draws the current frame into the encoder's surface (same film shader), stamped on the recorder's clock. */
+        private void encodeFrame(float[] stm) {
+            try {
+                EGL14.eglMakeCurrent(eglDisplay, encSurface, encSurface, eglContext);
+                GLES20.glViewport(0, 0, recW, recH);
+                if (profile.active) {
+                    GLES20.glUseProgram(program);
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTex);
+                    GLES20.glUniform4f(locFrameV, 0, 0, 1, 1);
+                    setUniforms();
+                    GLES20.glUniform4f(uniformLoc[20], 0, 0, 1, 1); // the file is exactly the 3:4 upright frame
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+                } else {
+                    drawCopy(stm);
+                }
+                long pts = recorder.nowNs();
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, encSurface, pts);
+                EGL14.eglSwapBuffers(eglDisplay, encSurface);
+                recorder.onVideoFrame(pts);
+            } catch (Exception e) {
+                android.util.Log.w(TAG, "encode frame failed: " + e.getMessage());
+            } finally {
+                EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
+            }
+        }
+
+        void startRecording(PluginCall call, boolean withAudio, int height) {
+            glHandler.post(() -> {
+                if (recording || !running || eglDisplay == EGL14.EGL_NO_DISPLAY) {
+                    call.reject(recording ? "Already recording." : "The camera is not running.");
+                    return;
+                }
+                try {
+                    // upright 3:4: 1440 -> 1080x1440, 960 -> 720x960, 720 -> 540x720
+                    recH = height == 960 || height == 720 ? height : 1440;
+                    recW = recH * 3 / 4;
+                    File dir = new File(context.getCacheDir(), "native_videos");
+                    File out = new File(dir, "film_" + System.currentTimeMillis() + ".mp4");
+                    NativeFilmRecorder r = new NativeFilmRecorder(context, out, recW, recH, recH >= 1440 ? 14_000_000 : 8_000_000, withAudio);
+                    encSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, r.inputSurface(), new int[]{EGL14.EGL_NONE}, 0);
+                    if (encSurface == EGL14.EGL_NO_SURFACE) {
+                        r.finish();
+                        throw new IllegalStateException("could not create the encoder surface");
+                    }
+                    r.start();
+                    recorder = r;
+                    recording = true;
+                    JSObject o = new JSObject();
+                    o.put("width", recW);
+                    o.put("height", recH);
+                    o.put("path", out.getAbsolutePath());
+                    call.resolve(o);
+                } catch (Exception e) {
+                    recorder = null;
+                    call.reject("Could not start recording: " + e.getMessage());
+                }
+            });
+        }
+
+        void stopRecording(PluginCall call) {
+            glHandler.post(() -> {
+                final NativeFilmRecorder r = recorder;
+                if (!recording || r == null) {
+                    call.reject("Not recording.");
+                    return;
+                }
+                recording = false; // no more frames are fed from here on
+                try {
+                    NativeFilmRecorder.Result res = r.finish();
+                    if (encSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, encSurface);
+                    encSurface = EGL14.EGL_NO_SURFACE;
+                    recorder = null;
+                    if (res.frames == 0 || res.bytes == 0) {
+                        call.reject("The recording contains no video frames.");
+                        return;
+                    }
+                    JSObject o = new JSObject();
+                    o.put("path", res.file.getAbsolutePath());
+                    o.put("width", res.width);
+                    o.put("height", res.height);
+                    o.put("frames", res.frames);
+                    o.put("durationMs", res.durationMs);
+                    o.put("avgFps", Math.round(res.avgFps * 10) / 10.0);
+                    o.put("bytes", res.bytes);
+                    o.put("audio", res.audio);
+                    o.put("audioNote", res.audioNote);
+                    o.put("videoEncoder", res.videoEncoder);
+                    o.put("audioEncoder", res.audioEncoder);
+                    call.resolve(o);
+                } catch (Exception e) {
+                    recorder = null;
+                    call.reject("Could not finish the recording: " + e.getMessage());
+                }
+            });
         }
 
         private void setUniforms() {

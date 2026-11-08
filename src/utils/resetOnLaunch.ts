@@ -1,24 +1,17 @@
 /**
- * Every launch starts from the app's defaults: grid, look, ratio-related and pro settings, mirror, ghost overlay and the
- * active session are all reset until the user uses them again. This must run before anything reads storage, so it is
- * imported first in main.tsx (some services read their settings while their module loads).
+ * On launch only the state that is meaningless after a restart is cleared. The user's settings (grid, look and camera,
+ * pro photo/video settings, mirror, ghost overlay, ...) now SURVIVE a restart: they used to be reset to defaults on
+ * every launch, which the user reported as a problem.
  *
- * Kept on purpose: the user's own content and setup (photos and sessions, favourites, saved presets, imported LUTs,
- * the licence) and facts measured about this phone (unusable video sizes, high-speed support).
+ * Still cleared: the "active session" marker, because no session is actually running after the app was closed.
+ * Kept always: photos and sessions, favourites, saved presets, imported LUTs, the licence, and facts measured about this
+ * phone (unusable video sizes, high-speed support).
+ *
+ * This must run before anything reads storage, so it is imported first in main.tsx.
  */
 export const FEATURE_STATE_KEYS = [
-  'cinegrid_selected_id', // chosen grid
-  'cinegrid_style', // grid appearance
-  'cinegrid_secondary', // secondary guides
-  'cinegrid_pro_photo_settings',
-  'cinegrid_pro_video_settings',
-  'cinegrid_look_state', // active LUT / filter / adjustments
-  'cinegrid_ghost_overlay',
-  'cinegrid_mirror_front',
-  'cinegrid_mirror_rear',
   'cinegrid_active_session_id', // no session is "running" after a restart
 ] as const;
-
 export function resetFeatureState(storage: Pick<Storage, 'removeItem'> | undefined = typeof localStorage === 'undefined' ? undefined : localStorage): void {
   if (!storage) return;
   for (const key of FEATURE_STATE_KEYS) {

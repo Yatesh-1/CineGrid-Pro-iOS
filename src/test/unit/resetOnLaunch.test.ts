@@ -17,9 +17,12 @@ describe('resetOnLaunch', () => {
     for (const k of kept) expect(store.get(k)).toBe('keep');
   });
 
-  it('covers the settings that used to survive a restart (grid, look, pro settings, mirror, active session)', () => {
-    for (const k of ['cinegrid_selected_id', 'cinegrid_look_state', 'cinegrid_pro_photo_settings', 'cinegrid_pro_video_settings', 'cinegrid_mirror_front', 'cinegrid_mirror_rear', 'cinegrid_active_session_id']) {
-      expect(FEATURE_STATE_KEYS).toContain(k);
+  it('keeps the user settings across a restart (they used to be reset to defaults)', () => {
+    for (const k of ['cinegrid_selected_id', 'cinegrid_look_state', 'cinegrid_pro_photo_settings', 'cinegrid_pro_video_settings', 'cinegrid_mirror_front', 'cinegrid_mirror_rear', 'cinegrid_ghost_overlay', 'cinegrid_active_camera_v1']) {
+      expect(FEATURE_STATE_KEYS).not.toContain(k);
     }
   });
-});
+
+  it('still clears the stale active-session marker', () => {
+    expect(FEATURE_STATE_KEYS).toContain('cinegrid_active_session_id');
+  });});
