@@ -187,3 +187,6 @@ class CameraProfileStore {
 }
 
 export const cameraProfileStore = new CameraProfileStore();
+
+// Handy for on-device debugging over remote DevTools: window.__cgProfiles.get('cam_gold400')
+if (typeof window !== 'undefined') (window as unknown as { __cgProfiles: CameraProfileStore }).__cgProfiles = cameraProfileStore;

@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(MediaSaverPlugin.class);
         registerPlugin(NativeCameraPlugin.class);
+        registerPlugin(NativeFilmCameraPlugin.class);
         super.onCreate(savedInstanceState);
         // Keep screen on during camera viewfinder & recording sessions
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
