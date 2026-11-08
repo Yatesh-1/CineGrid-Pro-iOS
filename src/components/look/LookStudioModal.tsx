@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import { cameraProfileStore } from '../../services/cameraProfileStore';
 import type {
   LookTab,
   LookState,
@@ -66,6 +67,14 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // The sheet opens compact so the live preview stays visible; the handle expands it for browsing.
+  const [expanded, setExpanded] = useState(false);
+  const dragStartY = useRef<number | null>(null);
+  useEffect(() => {
+    if (isOpen) setExpanded(false);
+  }, [isOpen]);
+  useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
+
   // Initialize and load LUT library
   useEffect(() => {
     lutStorageService.init().then(() => {
@@ -90,6 +99,12 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
 
   const activeLut = lutsList.find((l) => l.id === lookState.activeLutId) || null;
   const activeFilter = BUILTIN_LOOK_FILTERS.find((f) => f.id === lookState.activeFilterId) || null;
+  // Real name of whatever is active (camera, then LUT or filter), never a fixed label.
+  const activeCamera = cameraProfileStore.get(lookState.cameraProfileId);
+  const headerLabel =
+    [activeCamera?.name, activeLut ? `${activeLut.name} (${lookState.lutIntensity}%)` : activeFilter?.name]
+      .filter(Boolean)
+      .join(' · ') || 'Clean Raw';
 
   // Handle .cube file import
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -259,7 +274,7 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm animate-fade-in select-none">
+    <div className="fixed inset-0 z-50 flex flex-col justify-end pointer-events-none animate-fade-in select-none">
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -273,7 +288,31 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
       />
 
       {/* Main Bottom Sheet Container */}
-      <div className="w-full max-w-xl mx-auto bg-[#0c0d12]/95 border-t border-white/15 rounded-t-3xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style={{ paddingBottom: 'var(--cg-inset-bottom)' }}>
+      <div
+        data-testid="look-sheet"
+        data-expanded={expanded}
+        className="pointer-events-auto w-full max-w-xl mx-auto bg-[#0c0d12]/95 border-t border-white/15 rounded-t-3xl shadow-2xl flex flex-col overflow-hidden safe-bottom transition-[max-height] duration-300 ease-out"
+        style={{ paddingBottom: 'var(--cg-inset-bottom)', maxHeight: expanded ? '85dvh' : 'min(44dvh, 420px)' }}
+      >
+        {/* Drag handle: tap or drag up/down to expand / collapse */}
+        <button
+          type="button"
+          aria-label={expanded ? 'Collapse panel' : 'Expand panel'}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          onPointerDown={(e) => { dragStartY.current = e.clientY; }}
+          onPointerUp={(e) => {
+            const start = dragStartY.current;
+            dragStartY.current = null;
+            if (start === null) return;
+            const dy = e.clientY - start;
+            if (dy < -24) setExpanded(true);
+            else if (dy > 24) setExpanded(false);
+          }}
+          className="w-full h-6 flex items-center justify-center flex-shrink-0 touch-none"
+        >
+          <span className="block w-10 h-1 rounded-full bg-white/30" />
+        </button>
         {/* 1. Header Bar: title and status on the left, equal round icon buttons on the right */}
         <div className="px-4 pt-3 pb-2.5 flex items-center gap-2 border-b border-white/10">
           <div className="flex-1 min-w-0">
@@ -282,7 +321,7 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
               <span className="truncate">Look & Filter Studio</span>
             </h2>
             <p className="text-xs text-zinc-400 truncate mt-0.5 pl-6">
-              {activeLut ? `${activeLut.name} (${lookState.lutIntensity}%)` : activeFilter ? activeFilter.name : 'Clean Raw'}
+              {headerLabel}
             </p>
           </div>
 

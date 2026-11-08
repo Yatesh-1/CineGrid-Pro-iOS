@@ -94,7 +94,9 @@ float toneCh(float x) {
 // Sampling stage: chromatic aberration, lens softness, halation and bloom glow.
 vec3 filmBase(vec2 uv) {
   vec2 c = uv - 0.5;
-  vec2 texel = 1.0 / u_res;
+  // Radii are defined at 1080 px image height so a 4K still looks like the preview, only sharper.
+  float rs = u_res.y / 1080.0;
+  vec2 texel = rs / u_res;
   // Radial R/B channel shift, strongest at the corners.
   vec2 ca = c * (u_fOptics.y * 0.012);
   vec3 col = vec3(
@@ -181,11 +183,12 @@ vec3 filmFinish(vec3 rgb, vec2 uv) {
     rgb += n * amp;
   }
   if (u_fOptics.z > 0.0) {
-    vec2 dc = floor(uv * u_res / 6.0);
+    float dcell = 6.0 * (u_res.y / 1080.0);
+    vec2 dc = floor(uv * u_res / dcell);
     float dh = fHash(dc, 91.0);
-    vec2 inCell = fract(uv * u_res / 6.0) - 0.5;
+    vec2 inCell = fract(uv * u_res / dcell) - 0.5;
     float speck = step(1.0 - 0.012 * u_fOptics.z, dh) * (1.0 - smoothstep(0.1, 0.45, length(inCell)));
-    float sx = fHash(vec2(floor(uv.x * u_res.x / 3.0), 7.0), 55.0);
+    float sx = fHash(vec2(floor(uv.x * u_res.x / (3.0 * (u_res.y / 1080.0))), 7.0), 55.0);
     float scratch = step(1.0 - 0.0025 * u_fOptics.z, sx) * 0.35;
     rgb = mix(rgb, vec3(0.92), clamp(speck * 0.8 + scratch, 0.0, 1.0));
   }
@@ -651,17 +654,22 @@ export class WebGLLutPipeline {
    * Renders the source image or video element with active LUT and Color Adjustments
    */
   public renderFrame(
-    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement,
+    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | ImageBitmap,
     lookState: LookState,
-    lut?: LutDefinition | null
+    lut?: LutDefinition | null,
+    /** Optional cap on the longest output side (still capture). Live preview leaves this undefined. */
+    maxSide?: number
   ): boolean {
     if (this.isContextLost || !this.gl || !this.program) {
       return this.renderFallback2D(source, lookState);
     }
 
     const gl = this.gl;
-    const width = (source as HTMLVideoElement).videoWidth || (source as HTMLImageElement).naturalWidth || (source as HTMLCanvasElement).width || 1280;
-    const height = (source as HTMLVideoElement).videoHeight || (source as HTMLImageElement).naturalHeight || (source as HTMLCanvasElement).height || 720;
+    const srcW = (source as HTMLVideoElement).videoWidth || (source as HTMLImageElement).naturalWidth || (source as HTMLCanvasElement).width || 1280;
+    const srcH = (source as HTMLVideoElement).videoHeight || (source as HTMLImageElement).naturalHeight || (source as HTMLCanvasElement).height || 720;
+    const cap = maxSide && Math.max(srcW, srcH) > maxSide ? maxSide / Math.max(srcW, srcH) : 1;
+    const width = Math.round(srcW * cap);
+    const height = Math.round(srcH * cap);
 
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
@@ -675,12 +683,12 @@ export class WebGLLutPipeline {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.imageTexture);
     try {
-      if (this.lastTexWidth === width && this.lastTexHeight === height) {
+      if (this.lastTexWidth === srcW && this.lastTexHeight === srcH) {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
       } else {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-        this.lastTexWidth = width;
-        this.lastTexHeight = height;
+        this.lastTexWidth = srcW;
+        this.lastTexHeight = srcH;
       }
     } catch {
       return this.renderFallback2D(source, lookState);
@@ -731,7 +739,7 @@ export class WebGLLutPipeline {
    * Safe fallback for devices where WebGL is disabled or crashed
    */
   private renderFallback2D(
-    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement,
+    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | ImageBitmap,
     lookState: LookState
   ): boolean {
     const ctx = this.canvas.getContext('2d');
@@ -773,7 +781,6 @@ export class WebGLLutPipeline {
       gl.deleteTexture(this.dateTexture);
       this.dateTexture = null;
     }
-
     if (this.posBuffer) {
       gl.deleteBuffer(this.posBuffer);
       this.posBuffer = null;
@@ -798,5 +805,9 @@ export class WebGLLutPipeline {
       gl.deleteProgram(this.program);
       this.program = null;
     }
+
+    // Free the GPU context now: a still render uses a throwaway pipeline per photo, and browsers cap live contexts.
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    this.gl = null;
   }
 }

@@ -19,6 +19,8 @@ import {
 
 const USER_KEY = 'cinegrid_camera_profiles_v1';
 const OVERRIDE_KEY = 'cinegrid_camera_profile_overrides_v1';
+/** Last selected camera. Deliberately NOT in resetOnLaunch's FEATURE_STATE_KEYS, so it survives restarts. */
+const ACTIVE_KEY = 'cinegrid_active_camera_v1';
 const MAX_USER_PROFILES = 100;
 
 type Listener = () => void;
@@ -88,6 +90,26 @@ class CameraProfileStore {
   get(id: string | null | undefined): CameraProfile | null {
     if (!id) return null;
     return this.list().find((p) => p.id === id) ?? null;
+  }
+
+  /** The remembered camera, or null if none was chosen or it no longer exists (deleted / corrupt). */
+  getActiveId(): string | null {
+    try {
+      const id = localStorage.getItem(ACTIVE_KEY);
+      return id && this.get(id) ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Remembers the selection (null = explicit No camera). Never notifies: it mirrors UI state. */
+  setActiveId(id: string | null): void {
+    try {
+      if (id) localStorage.setItem(ACTIVE_KEY, id);
+      else localStorage.removeItem(ACTIVE_KEY);
+    } catch {
+      /* storage unavailable: selection just won't persist */
+    }
   }
 
   isModified(id: string): boolean {

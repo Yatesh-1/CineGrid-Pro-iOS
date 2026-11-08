@@ -64,6 +64,7 @@ import type { PhotographySession } from './types/session';
 import { type GhostOverlaySettings, DEFAULT_GHOST_SETTINGS } from './types/ghost';
 import { type LookState, DEFAULT_LOOK_STATE, type LutDefinition } from './types/lut';
 import { cameraProfileStore } from './services/cameraProfileStore';
+import { renderLookStill } from './utils/renderLookStill';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
 import { FeatureRail } from './components/camera/FeatureRail';
@@ -391,9 +392,11 @@ export function App() {
   const [lookState, setLookState] = useState<LookState>(() => {
     try {
       const saved = localStorage.getItem('cinegrid_look_state');
-      return saved ? { ...DEFAULT_LOOK_STATE, ...JSON.parse(saved) } : DEFAULT_LOOK_STATE;
+      const base = saved ? { ...DEFAULT_LOOK_STATE, ...JSON.parse(saved) } : DEFAULT_LOOK_STATE;
+      // The selected virtual camera outlives the launch reset of the rest of the look.
+      return { ...base, cameraProfileId: cameraProfileStore.getActiveId() };
     } catch {
-      return DEFAULT_LOOK_STATE;
+      return { ...DEFAULT_LOOK_STATE, cameraProfileId: cameraProfileStore.getActiveId() };
     }
   });
   const [isLookModalOpen, setIsLookModalOpen] = useState(false);
@@ -502,6 +505,10 @@ export function App() {
       localStorage.setItem('cinegrid_look_state', JSON.stringify(lookState));
     } catch {}
   }, [lookState]);
+
+  useEffect(() => {
+    cameraProfileStore.setActiveId(lookState.cameraProfileId ?? null);
+  }, [lookState.cameraProfileId]);
 
   // Persist Ghost Overlay settings
   useEffect(() => {
@@ -1403,10 +1410,15 @@ export function App() {
 
     // Real still from the phone's still pipeline (full sensor resolution) when no LUT canvas is needed;
     // otherwise, or if unavailable, the preview frame as before.
-    const fullRes =
-      !useLutCanvas && !useSimulatedScene ? await cameraService.takeFullResStill(videoRef.current) : null;
+    const fullRes = !useSimulatedScene ? await cameraService.takeFullResStill(videoRef.current) : null;
     const source: HTMLVideoElement | HTMLImageElement | ImageBitmap = fullRes ?? previewSource;
-    const captureSource = useLutCanvas ? lutCanvasRef.current! : source;
+    // With a look on, grade the full-resolution still with the same shader as the preview. If the GPU cannot,
+    // fall back to the preview-resolution canvas (the previous behaviour) instead of faking detail.
+    const lookStill =
+      useLutCanvas && fullRes
+        ? renderLookStill(fullRes, lookState, activeLut, cameraProfileStore.get(lookState.cameraProfileId))
+        : null;
+    const captureSource = lookStill ? lookStill.canvas : useLutCanvas ? lutCanvasRef.current! : source;
     const skipCss = useLutCanvas;
 
     try {
@@ -1423,6 +1435,7 @@ export function App() {
       mirrorActive,
       portraitFocus
     );
+    lookStill?.dispose();
 
     if (!dataUrl) return null;
 
@@ -1475,7 +1488,8 @@ export function App() {
       },
     };
     } finally {
-      // Release the full-resolution bitmap's memory as soon as the JPEGs are made
+      // Release the full-resolution bitmap's memory as soon as the JPEGs are made (dispose is idempotent)
+      lookStill?.dispose();
       fullRes?.close();
     }
   };

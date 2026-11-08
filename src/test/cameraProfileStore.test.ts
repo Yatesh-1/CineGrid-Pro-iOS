@@ -72,3 +72,36 @@ describe('cameraProfileStore', () => {
     expect(u.builtIn).toBe(false);
   });
 });
+
+describe('active camera persistence', () => {
+  it('remembers the selection across a simulated relaunch and survives the launch reset', async () => {
+    const id = BUILTIN_PROFILES[0].id;
+    store.setActiveId(id);
+    store._reloadForTests();
+    expect(store.getActiveId()).toBe(id);
+    // resetOnLaunch clears look state but must not touch the remembered camera
+    const { resetFeatureState } = await import('../utils/resetOnLaunch');
+    resetFeatureState();
+    expect(store.getActiveId()).toBe(id);
+  });
+
+  it('persists a custom camera and its settings, and null means an explicit No camera', () => {
+    const dup = store.duplicate(BUILTIN_PROFILES[1].id)!;
+    store.update({ ...dup, grain: { ...dup.grain, amount: 0.77 } });
+    store.setActiveId(dup.id);
+    store._reloadForTests();
+    expect(store.getActiveId()).toBe(dup.id);
+    expect(store.get(dup.id)?.grain.amount).toBe(0.77);
+    store.setActiveId(null);
+    expect(store.getActiveId()).toBeNull();
+  });
+
+  it('falls back to null when the remembered camera was deleted or the value is junk', () => {
+    const dup = store.duplicate(BUILTIN_PROFILES[1].id)!;
+    store.setActiveId(dup.id);
+    store.remove(dup.id);
+    expect(store.getActiveId()).toBeNull();
+    localStorage.setItem('cinegrid_active_camera_v1', 'does_not_exist');
+    expect(store.getActiveId()).toBeNull();
+  });
+});
