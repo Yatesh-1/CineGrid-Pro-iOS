@@ -636,6 +636,12 @@ public class NativeFilmCameraPlugin extends Plugin {
             try {
                 cm.openCamera(cameraId, new CameraDevice.StateCallback() {
                     @Override public void onOpened(CameraDevice device) {
+                        // stop() may have run while the camera was opening (screen lock, app switch): its surface is gone,
+                        // so do not build a session on it. This race crashed the app on the first lock/unlock test.
+                        if (!running) {
+                            device.close();
+                            return;
+                        }
                         camera = device;
                         try {
                             jpegReader = ImageReader.newInstance(jpegSize.getWidth(), jpegSize.getHeight(), ImageFormat.JPEG, 2);
@@ -643,6 +649,10 @@ public class NativeFilmCameraPlugin extends Plugin {
                             List<Surface> surfaces = Arrays.asList(camSurface, jpegReader.getSurface());
                             device.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
                                 @Override public void onConfigured(CameraCaptureSession s) {
+                                    if (!running) {
+                                        s.close();
+                                        return;
+                                    }
                                     capture = s;
                                     try {
                                         previewBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
@@ -666,13 +676,15 @@ public class NativeFilmCameraPlugin extends Plugin {
                                             o.put("awbModes", awbModeNames());
                                             c.resolve(o);
                                         }
-                                    } catch (CameraAccessException e) {
+                                    } catch (Exception e) {
                                         fail("Preview request failed: " + e.getMessage());
                                     }
                                 }
                                 @Override public void onConfigureFailed(CameraCaptureSession s) { fail("Camera session configuration failed."); }
                             }, camHandler);
-                        } catch (CameraAccessException e) {
+                        } catch (Exception e) {
+                            // IllegalArgumentException (abandoned surface) and friends must never escape this camera thread.
+                            device.close();
                             fail("Could not create the camera session: " + e.getMessage());
                         }
                     }
@@ -685,7 +697,7 @@ public class NativeFilmCameraPlugin extends Plugin {
                         fail("Camera error " + err + " (it may be in use by another app).");
                     }
                 }, camHandler);
-            } catch (SecurityException | CameraAccessException e) {
+            } catch (Exception e) {
                 fail("Could not open the camera: " + e.getMessage());
             }
         }
