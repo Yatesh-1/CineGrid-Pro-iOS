@@ -48,6 +48,22 @@ export interface NativeStill {
   zoom: number;
 }
 
+export interface NativeRecording {
+  path: string;
+  width: number;
+  height: number;
+  frames: number;
+  durationMs: number;
+  /** Measured: (frames - 1) / time between first and last encoded frame. */
+  avgFps: number;
+  bytes: number;
+  /** False when the microphone was unavailable: the file then has no audio track. */
+  audio: boolean;
+  audioNote: string;
+  videoEncoder: string;
+  audioEncoder: string;
+}
+
 export interface NativeFilmStartOptions {
   facing: 'back' | 'front';
   /** CSS px of the preview area, relative to the WebView. */
@@ -68,6 +84,8 @@ interface NativeFilmPluginApi {
   setTorch(o: { on: boolean }): Promise<void>;
   setWhiteBalance(o: { mode: string }): Promise<void>;
   getStats(): Promise<NativeFilmStats>;
+  startRecording(o: { audio: boolean; height: number }): Promise<{ path: string; width: number; height: number }>;
+  stopRecording(): Promise<NativeRecording>;
   addListener(event: 'interrupted', cb: () => void): Promise<{ remove: () => Promise<void> }>;
 }
 
@@ -86,8 +104,23 @@ export const nativeFilm = {
   setTorch: (on: boolean) => Plugin.setTorch({ on }),
   setWhiteBalance: (mode: string) => Plugin.setWhiteBalance({ mode }),
   getStats: () => Plugin.getStats(),
+  startRecording: (audio: boolean, height: number) => Plugin.startRecording({ audio, height }),
+  stopRecording: () => Plugin.stopRecording(),
   onInterrupted: (cb: () => void) => Plugin.addListener('interrupted', cb),
 };
+
+/**
+ * Height of the recorded frame (3:4, so 960 = 720x960). Measured on the test phone with the film look on: 1440 (1080x1440)
+ * only reached ~16 fps, 960 held 29.5 fps, so 960 is the default. See docs/PHASE3_REPORT.md.
+ */
+export const NATIVE_RECORD_HEIGHT = 960;
+
+/** A saved recording as a blob URL, the form the in-app gallery and the device-save helper already work with. */
+export async function nativeRecordingToBlobUrl(path: string): Promise<string> {
+  const res = await fetch(Capacitor.convertFileSrc(`file://${path}`));
+  if (!res.ok) throw new Error(`Could not read the recording (${res.status}).`);
+  return URL.createObjectURL(await res.blob());
+}
 
 /** Loads a still saved by the native camera as a bitmap. EXIF orientation is applied, so it comes out upright. */
 export async function nativeStillToBitmap(still: Pick<NativeStill, 'path'>): Promise<ImageBitmap> {

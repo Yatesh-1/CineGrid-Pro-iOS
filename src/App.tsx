@@ -67,6 +67,7 @@ import { cameraProfileStore } from './services/cameraProfileStore';
 import { renderLookStill } from './utils/renderLookStill';
 import { renderProbe } from './utils/renderProbe';
 import { useNativeFilmCamera } from './hooks/useNativeFilmCamera';
+import { NATIVE_RECORD_HEIGHT, nativeRecordingToBlobUrl } from './services/nativeFilmCamera';
 import { loadPrefs, savePrefs } from './utils/uiPrefs';
 import { Smartphone, Monitor, ShieldCheck, KeyRound, Loader2, Camera, Grid3X3, Palette, Sliders, RectangleHorizontal, ScanFace, Layers, Heart, Zap, ZapOff, SwitchCamera, Lock, Unlock, Sun, House, Timer as TimerIcon, FlipHorizontal } from 'lucide-react';
 import { Sheet } from './components/ui/Sheet';
@@ -1239,7 +1240,7 @@ export function App() {
   useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
   const activeFilmProfile = cameraProfileStore.get(lookState.cameraProfileId);
   const nativeFilm = useNativeFilmCamera({
-    wanted: Boolean(activeFilmProfile) && proSettings.captureMode === 'photo' && !useSimulatedScene,
+    wanted: Boolean(activeFilmProfile) && (proSettings.captureMode === 'photo' || proSettings.captureMode === 'video') && !useSimulatedScene,
     profile: activeFilmProfile,
     front: isFrontCamera,
     zoom: zoomLevel,
@@ -2089,7 +2090,87 @@ export function App() {
   };
 
   // Video Recording handler (with Audio Intelligence integration)
+  // Video with the native film camera: Camera2 -> film shader -> hardware H.264 + AAC, all native. Nothing is sent
+  // through the web recorder, and the result (size, fps, audio) is what the encoder really wrote.
+  const saveNativeClip = async (res: Awaited<ReturnType<typeof nativeFilm.stopRecording>>, label?: string) => {
+    const videoUrl = await nativeRecordingToBlobUrl(res.path);
+    // clip names from the cinema slate already end in .mp4: strip it so the file is not called x.mp4_123.mp4
+    const fileName = `${(label ?? 'CINEGRID_VID').replace(/\.mp4$/i, '')}_${Date.now()}.mp4`;
+    saveToDevice(videoUrl, fileName, 'video/mp4').catch((err) => console.warn('Save to device failed:', err));
+    if (!res.audio) showToast(`Saved without sound (${res.audioNote || 'no microphone'})`, 4000);
+    else if (res.avgFps < 24) showToast(`Recorded at ${res.avgFps} fps: this phone could not keep up`, 4000);
+    console.info(`[record] saved ${fileName}: ${res.width}x${res.height} ${res.frames} frames ${res.avgFps} fps audio=${res.audio} ${res.videoEncoder}`);
+    const videoItem: CapturedPhoto = {
+      id: fileName,
+      dataUrl: videoUrl,
+      thumbnailUrl: videoUrl,
+      timestamp: Date.now(),
+      aspectRatio,
+      filterUsed: activeFilmProfile?.name ?? selectedFilter.name,
+      gridUsed: selectedGrid.name,
+      mediaType: 'video',
+      durationSeconds: Math.round(res.durationMs / 1000),
+      proSettings: {
+        iso: proSettings.iso,
+        shutter: proSettings.shutterSpeed,
+        kelvin: proSettings.whiteBalance,
+        ev: proSettings.ev,
+      },
+    };
+    setCapturedPhotos((prev) => [videoItem, ...prev]);
+    mediaStorageService.savePhoto(videoItem).catch(() => {});
+  };
+
+  const handleNativeVideoToggle = async () => {
+    if (!isRecordingVideo) {
+      try {
+        await nativeFilm.startRecording(true, NATIVE_RECORD_HEIGHT);
+      } catch (err) {
+        showToast(`Could not start recording: ${(err as Error)?.message || 'the camera refused'}`, 3500);
+        return;
+      }
+      setIsRecordingVideo(true);
+      setRecordingDuration(0);
+      cameraAudio.playFocusLock();
+      recordingTimerRef.current = window.setInterval(() => setRecordingDuration((prev) => prev + 1), 1000);
+      return;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecordingVideo(false);
+    cameraAudio.playShutter();
+    try {
+      await saveNativeClip(await nativeFilm.stopRecording());
+    } catch (err) {
+      showToast(`Recording failed: ${(err as Error)?.message || 'the video could not be saved'}`, 4000);
+    }
+  };
+
+  // The cinema HUD (what Video mode shows) drives its own recording state; native recording reuses it.
+  const handleNativeCinemaToggle = async () => {
+    if (!cinemaConfig.isRecording) {
+      try {
+        await nativeFilm.startRecording(true, NATIVE_RECORD_HEIGHT);
+      } catch (err) {
+        showToast(`Could not start recording: ${(err as Error)?.message || 'the camera refused'}`, 3500);
+        return;
+      }
+      cinemaVideoService.beginExternalRecording();
+      cameraAudio.playFocusLock();
+      return;
+    }
+    cameraAudio.playShutter();
+    const clip = cinemaVideoService.endExternalRecording();
+    try {
+      await saveNativeClip(await nativeFilm.stopRecording(), clip?.clipName);
+    } catch (err) {
+      showToast(`Recording failed: ${(err as Error)?.message || 'the video could not be saved'}`, 4000);
+    }
+  };
   const handleToggleVideoRecording = async () => {
+    if (nativeFilm.active) return handleNativeVideoToggle();
     if (!isRecordingVideo) {
       if (!stream) return;
       const recStream = await withMicrophone(stream);
@@ -2162,6 +2243,7 @@ export function App() {
 
   // Cinema Video Recording handler (High-end digital cinema standards)
   const handleToggleCinemaRecord = async () => {
+    if (nativeFilm.active) return handleNativeCinemaToggle();
     if (!cinemaConfig.isRecording) {
       if (!stream) return;
       // One source of truth: the codec/bitrate chosen in Pro settings is what the recorder uses.

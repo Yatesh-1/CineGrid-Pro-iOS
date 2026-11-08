@@ -373,6 +373,41 @@ class CinemaVideoService {
     return false;
   }
 
+  /**
+   * For recorders that live outside the web MediaRecorder (the native film camera). Drives the same HUD state, timer
+   * and clip naming as startCinemaRecording, but does not start any recorder itself.
+   */
+  public beginExternalRecording(): string {
+    if (this.config.isRecording) return this.config.productionSlate.clipName;
+    this.stopPreRecord();
+    const clipName = this.generateClipName();
+    this.config.productionSlate.clipName = clipName;
+    this.config.isRecording = true;
+    this.config.recordingElapsedSeconds = 0;
+    this.recordingStartTime = performance.now();
+    if (this.recordTimer) clearInterval(this.recordTimer);
+    this.recordTimer = window.setInterval(() => {
+      this.config.recordingElapsedSeconds = Math.floor((performance.now() - this.recordingStartTime) / 1000);
+      this.notify();
+    }, 500);
+    this.notify();
+    return clipName;
+  }
+
+  public endExternalRecording(): { clipName: string; duration: number } | null {
+    if (!this.config.isRecording) return null;
+    if (this.recordTimer) {
+      clearInterval(this.recordTimer);
+      this.recordTimer = null;
+    }
+    const result = { clipName: this.config.productionSlate.clipName, duration: this.config.recordingElapsedSeconds };
+    this.config.productionSlate.take += 1; // next shot, like a normal cinema stop
+    this.config.isRecording = false;
+    this.config.recordingElapsedSeconds = 0;
+    this.notify();
+    return result;
+  }
+
   // Stop Cinema Recording
   public async stopCinemaRecording(): Promise<{ url: string; clipName: string; duration: number } | null> {
     if (!this.config.isRecording) return null;

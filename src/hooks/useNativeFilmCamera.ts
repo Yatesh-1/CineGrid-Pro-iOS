@@ -5,6 +5,7 @@ import {
   nativeFilm,
   nativeStillToBitmap,
   type NativeFilmInfo,
+  type NativeRecording,
   type NativeStill,
 } from '../services/nativeFilmCamera';
 
@@ -33,6 +34,9 @@ export interface NativeFilmState {
   error: string | null;
   /** Takes a full-resolution photo through Camera2 and returns it decoded (upright) with its metadata. */
   takePhoto: () => Promise<{ bitmap: ImageBitmap; still: NativeStill }>;
+  startRecording: (audio: boolean, height: number) => Promise<void>;
+  /** Ends the recording and returns what was really written (size, measured fps, whether audio was captured). */
+  stopRecording: () => Promise<NativeRecording>;
   setTorch: (on: boolean) => Promise<void>;
   setWhiteBalance: (mode: string) => Promise<void>;
 }
@@ -201,6 +205,10 @@ export function useNativeFilmCamera(p: Params): NativeFilmState {
     info,
     error,
     takePhoto,
+    startRecording: async (audio: boolean, height: number) => {
+      await nativeFilm.startRecording(audio, height);
+    },
+    stopRecording: nativeFilm.stopRecording,
     setTorch: nativeFilm.setTorch,
     setWhiteBalance: nativeFilm.setWhiteBalance,
   };
