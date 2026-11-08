@@ -16,3 +16,6 @@ Implications: DNG capture and 120 fps high-speed are genuinely available on this
 ## Not testable here
 - iOS devices (no Mac, no iPhone connected). All iOS rows in FEATURE_STATUS.md stay unverified/BLOCKED.
 - Other Android manufacturers/versions: only this one device is available.
+
+## Encoders (device log)
+hevcEncoder=false, heicEncoder=false on CPH2421 (API 30) as reported by the NativeCamera plugin. HEVC recording must not be offered on this device until confirmed otherwise.
