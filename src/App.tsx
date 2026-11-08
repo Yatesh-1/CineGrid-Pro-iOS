@@ -1410,7 +1410,10 @@ export function App() {
 
     // Real still from the phone's still pipeline (full sensor resolution) when no LUT canvas is needed;
     // otherwise, or if unavailable, the preview frame as before.
-    const fullRes = !useSimulatedScene ? await cameraService.takeFullResStill(videoRef.current) : null;
+    const frameRatio = frameWidthOverHeight(aspectRatio);
+    const fullRes = !useSimulatedScene
+      ? await cameraService.takeFullResStill(videoRef.current, 4000, Math.max(frameRatio, 1 / frameRatio))
+      : null;
     const source: HTMLVideoElement | HTMLImageElement | ImageBitmap = fullRes ?? previewSource;
     // With a look on, grade the full-resolution still with the same shader as the preview. If the GPU cannot,
     // fall back to the preview-resolution canvas (the previous behaviour) instead of faking detail.

@@ -70,9 +70,12 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
   // The sheet opens compact so the live preview stays visible; the handle expands it for browsing.
   const [expanded, setExpanded] = useState(false);
   const dragStartY = useRef<number | null>(null);
-  useEffect(() => {
+  // Reopening always starts compact (adjusting state while rendering avoids an extra effect pass).
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
     if (isOpen) setExpanded(false);
-  }, [isOpen]);
+  }
   useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
 
   // Initialize and load LUT library
@@ -291,7 +294,7 @@ export const LookStudioModal: React.FC<LookStudioModalProps> = ({
       <div
         data-testid="look-sheet"
         data-expanded={expanded}
-        className="pointer-events-auto w-full max-w-xl mx-auto bg-[#0c0d12]/95 border-t border-white/15 rounded-t-3xl shadow-2xl flex flex-col overflow-hidden safe-bottom transition-[max-height] duration-300 ease-out"
+        className="pointer-events-auto w-full max-w-xl mx-auto bg-[#0c0d12] border-t border-white/15 rounded-t-3xl shadow-2xl flex flex-col overflow-hidden safe-bottom transition-[max-height] duration-300 ease-out"
         style={{ paddingBottom: 'var(--cg-inset-bottom)', maxHeight: expanded ? '85dvh' : 'min(44dvh, 420px)' }}
       >
         {/* Drag handle: tap or drag up/down to expand / collapse */}

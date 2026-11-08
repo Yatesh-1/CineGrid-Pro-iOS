@@ -93,6 +93,20 @@ export interface AudioMeterLevel {
   peakClipping: boolean;
 }
 
+/**
+ * Largest still of the wanted shape that fits inside the camera's advertised limits.
+ * The two maxima are independent limits, not a mode: asking for (maxW, maxH) can return a different shape
+ * (e.g. 16:9) that is then cropped to the frame, wasting pixels. Matching the frame ratio avoids that crop.
+ * Without a usable ratio the maxima are returned unchanged (previous behaviour).
+ */
+export function stillSizeFor(maxW: number, maxH: number, ratio?: number): { width: number; height: number } {
+  if (!ratio || !Number.isFinite(ratio) || ratio < 1) return { width: maxW, height: maxH };
+  const long = Math.min(maxW, Math.floor(maxH * ratio));
+  const short = Math.round(long / ratio);
+  if (long < 1 || short < 1) return { width: maxW, height: maxH };
+  return { width: long, height: short };
+}
+
 export class CameraService {
   private static instance: CameraService;
   private mediaRecorder: MediaRecorder | null = null;
@@ -195,7 +209,12 @@ export class CameraService {
    * image processing. Returns null whenever it is unavailable, slow, or does not match the preview
    * orientation, so callers fall back to grabbing the preview frame.
    */
-  public async takeFullResStill(videoEl: HTMLVideoElement | null, timeoutMs = 4000): Promise<ImageBitmap | null> {
+  public async takeFullResStill(
+    videoEl: HTMLVideoElement | null,
+    timeoutMs = 4000,
+    /** Long/short side ratio of the frame being saved (e.g. 4/3). Lets the still match it instead of being cropped. */
+    targetRatio?: number
+  ): Promise<ImageBitmap | null> {
     const track = this.getVideoTrack();
     const ImageCaptureCtor = (globalThis as { ImageCapture?: new (t: MediaStreamTrack) => any }).ImageCapture;
     if (!track || !videoEl || !ImageCaptureCtor || track.readyState !== 'live' || typeof createImageBitmap !== 'function') {
@@ -210,7 +229,8 @@ export class CameraService {
         const w = caps?.imageWidth?.max;
         const h = caps?.imageHeight?.max;
         if (typeof w === 'number' && typeof h === 'number' && Math.max(w, h) <= 8192) {
-          settings = { ...settings, imageWidth: w, imageHeight: h };
+          const size = stillSizeFor(w, h, targetRatio);
+          settings = { ...settings, imageWidth: size.width, imageHeight: size.height };
         }
       } catch {
         // capabilities unavailable: take the default still size
