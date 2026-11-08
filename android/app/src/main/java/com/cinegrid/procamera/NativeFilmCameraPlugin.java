@@ -503,6 +503,7 @@ public class NativeFilmCameraPlugin extends Plugin {
             o.put("surface", surfW + "x" + surfH);
             o.put("sensorOrientation", sensorOrientation);
             o.put("stMatrix", java.util.Arrays.toString(stMatrix));
+            o.put("stillSize", jpegSize.getWidth() + "x" + jpegSize.getHeight());
             o.put("zoom", zoomRatio);
             o.put("evStops", evIndex * evStep);
             o.put("torch", torchOn);

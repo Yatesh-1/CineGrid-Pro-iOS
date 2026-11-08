@@ -3512,6 +3512,7 @@ export function App() {
 
       {/* 1. Blackmagic Pro Manual Camera Settings Drawer */}
       <ProSettingsDrawer
+        nativeFilmActive={nativeFilm.active}
         isOpen={isProDrawerOpen}
         onClose={() => setIsProDrawerOpen(false)}
         settings={proSettings}

@@ -3,6 +3,7 @@ import { Copy, Download, RotateCcw, Trash2, Upload, Camera, Ban } from 'lucide-r
 import type { LookState } from '../../types/lut';
 import { cameraProfileStore } from '../../services/cameraProfileStore';
 import { shareTextFile } from '../../services/shareService';
+import { isNativeFilmSupported, nativeFilm, type NativeFilmStats } from '../../services/nativeFilmCamera';
 import type { CameraProfile, BorderStyle, DateFormat, DatePosition } from '../../utils/cameraProfile';
 import { renderProbe, type ProbeSnapshot } from '../../utils/renderProbe';
 
@@ -81,11 +82,29 @@ const GROUPS: { title: string; rows: Row[] }[] = [
 const PerfReadout: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [snap, setSnap] = useState<ProbeSnapshot>(() => renderProbe.snapshot());
+  const [native, setNative] = useState<NativeFilmStats | null>(null);
+  const [exportNote, setExportNote] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
-    const id = window.setInterval(() => setSnap(renderProbe.snapshot()), 1000);
+    const tick = () => {
+      setSnap(renderProbe.snapshot());
+      if (isNativeFilmSupported()) nativeFilm.getStats().then((s) => setNative(s.state === 'stopped' ? null : s)).catch(() => setNative(null));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, [open]);
+
+  // Real, measured values only; anything the platform does not expose says so.
+  const exportDiagnostics = async () => {
+    const report = { generatedAt: new Date().toISOString(), userAgent: navigator.userAgent, web: renderProbe.snapshot(), native, thermal: 'not exposed to the app by this platform' };
+    try {
+      const r = await shareTextFile('cinegrid-diagnostics.json', JSON.stringify(report, null, 2));
+      setExportNote(r === 'shared' ? 'Choose where to save the diagnostics file.' : 'Export cancelled. Nothing was saved.');
+    } catch (err) {
+      setExportNote(`Export failed: ${(err as Error)?.message || 'could not write the file'}.`);
+    }
+  };
   const v = (x: number | null, unit = ''): string => (x === null ? 'n/a' : `${x}${unit}`);
   const rows: [string, string][] = [
     ['Preview FPS', v(snap.fps)],
@@ -96,6 +115,20 @@ const PerfReadout: React.FC = () => {
     ['WebGL context', snap.contextStatus],
     ['Photo capture (last / avg)', `${v(snap.lastCaptureMs)} / ${v(snap.avgCaptureMs, ' ms')}  (${snap.captures})`],
   ];
+  if (native) {
+    rows.push(
+      ['Native camera', `${native.front ? 'front' : 'rear'} - ${native.state}`],
+      ['Native preview FPS (render / camera)', `${native.renderFps ?? 'n/a'} / ${native.cameraFps ?? 'n/a'}`],
+      ['Native frame submit (avg / max)', `${native.avgRenderMs ?? 'n/a'} / ${native.maxRenderMs ?? 'n/a'} ms`],
+      ['Camera frames dropped since start', String(native.droppedCameraFrames ?? 'n/a')],
+      ['Preview buffer / screen surface', `${native.previewBuffer ?? 'n/a'} / ${native.surface ?? 'n/a'}`],
+      ['Photo size from the camera', native.stillSize ?? 'n/a'],
+      ['Camera AE frame-rate range', native.aeFpsRange ?? 'n/a'],
+      ['Zoom / EV (as the camera accepted)', `${native.zoom ?? 'n/a'}x / ${native.evStops ?? 'n/a'}`],
+      ['Native recording', native.recording ? 'recording' : 'idle']
+    );
+  }
+  rows.push(['Thermal state', 'not exposed to the app by this platform']);
   return (
     <details
       className="rounded-xl border border-white/10 bg-zinc-950/60"
@@ -120,6 +153,14 @@ const PerfReadout: React.FC = () => {
         >
           Reset counters
         </button>
+        <button
+          type="button"
+          className="mt-1 ml-2 h-8 px-3 rounded-full text-[11px] font-semibold border border-white/10 bg-zinc-900 text-zinc-200"
+          onClick={exportDiagnostics}
+        >
+          Export diagnostics
+        </button>
+        {exportNote && <div role="status" className="mt-1 text-[11px] text-zinc-300">{exportNote}</div>}
       </div>
     </details>
   );

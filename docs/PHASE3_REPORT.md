@@ -108,3 +108,19 @@ Changed: `MainActivity.java` (register plugin), `src/App.tsx` (hook, guards, nat
 - Cause 2: aspect ratio, the legacy filter and its strength, the self-timer, HDR and flash mode were never saved at all. They are now saved in `cinegrid_ui_prefs_v1` and validated on load (`src/utils/uiPrefs.ts`).
 - DEVICE: changed the aspect ratio to 16:9, force-stopped and cold-started: it came back as 16:9 (also after a second restart on the final build), along with the film camera.
 - Deliberately NOT persisted: zoom and front/rear facing (the camera opens on the rear camera at 1x). Pro-settings persistence relies on the existing keys; only the ratio/camera were re-verified on the device, not every individual pro control.
+## L. Follow-up verification (same day, DEVICE unless stated)
+All through the app's own controls on the OPPO CPH2421, 0 crash-buffer lines throughout.
+| Item | Result |
+|---|---|
+| Front/back flip | rear -> front (sensor orientation 270, 29.9 fps) -> rear (90, 29.5 fps); web stream stays closed. Front-camera picture orientation/mirror **not visually checked** |
+| Zoom strip | 2x -> camera reports 2.0, 5x -> 5.0, 1x -> 1.0, ~30 fps throughout |
+| EV slider ("Exposure compensation") | 1 -> 1.0, 2 -> 2.0, -2 -> -2.0, 0.5 -> 0.5, 0 -> 0 (the camera's own readback) |
+| Photo ratios | 16:9 -> 2160x3840 (the camera's real 16:9 mode, 8.3 MP; was a 6 MP crop), 1:1 -> 2448x2448, 4:3 -> 2448x3264; look and original identical size each time |
+| Recording interrupted by Home | was BROKEN (clip orphaned in cache, HUD stuck on "Stop Recording"). Fixed: finalised on pause, saved to the gallery (10.3 MB), HUD reset, native back at 29.9 fps |
+| Recording interrupted by screen lock | same fix: clip saved (11.1 MB, avc1 720x960 307 frames 10.60 s + AAC 10.59 s, decodes, mean luma 163), take number advanced, native back at 29.7 fps |
+| Long recordings | 164 s run held ~30 fps at every 25 s sample but its clip was never saved (BUG: blob URL pushed a 169 MB clip through web-view memory, heap 256 MB). Fixed by passing the file URL to the native copy path and storing recordings in app storage. Re-test: 20 s clip in the gallery after 4 s, 158 s clip (161 MB) after 8 s, heap 22 MB. The 158 s clip averaged **21.4 fps** (3394 frames, CPU 63-73 C): sustained recording slows as the phone heats; audio/video lengths agree within 26 ms |
+| Diagnostics panel | Performance section now shows live native values (camera, fps, submit time, dropped frames, buffers, photo size, AE range, zoom/EV, recording) and states that thermal state is not exposed; "Export diagnostics" opens the share sheet with a real file. TESTS cover rows, off-Android behaviour and export honesty |
+| Native-mode notice | Pro drawer now says what does not apply while the native film camera is on (ISO, shutter, Kelvin, tint, colour sliders, scopes, detection; focus is continuous auto). Shown on every tab |
+
+Still NOT verified: a deliberate audio/video sync test (only track-length agreement is measured), profile import through the Android file picker (it lists the user's files, so I did not drive it), front-camera visual orientation, hotter/longer sessions than ~160 s, 1080p film-look at 30 fps (not achievable here), iOS (no Mac).
+Known limitation added: ISO/shutter sliders are not hardware controls in native mode (Camera2 manual exposure is not implemented); the notice says so.

@@ -37,6 +37,13 @@ export interface NativeFilmStats {
   framesRendered?: number;
   cameraFrames?: number;
   droppedCameraFrames?: number;
+  front?: boolean;
+  stillSize?: string;
+  aeFpsRange?: string;
+  zoom?: number;
+  evStops?: number;
+  torch?: boolean;
+  recording?: boolean;
 }
 
 export interface NativeStill {

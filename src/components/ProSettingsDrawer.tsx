@@ -65,6 +65,8 @@ interface ProSettingsDrawerProps {
   onSelectFilter?: (filter: CameraFilter) => void;
   /** Which still formats and multi-frame modes this phone's camera really supports. */
   stillSupport?: StillSupport;
+  /** The native film camera owns the camera: several web-side controls then have no effect, and the drawer says so. */
+  nativeFilmActive?: boolean;
 }
 
 export type ProSettingsTab = 'camera' | 'exposure' | 'focus' | 'color' | 'monitoring' | 'recording';
@@ -112,6 +114,7 @@ const PercentSlider: React.FC<{ label: string; value: number; readout: string; a
 );
 
 export const ProSettingsDrawer: React.FC<ProSettingsDrawerProps> = ({
+  nativeFilmActive = false,
   isOpen,
   onClose,
   settings,
@@ -217,6 +220,11 @@ export const ProSettingsDrawer: React.FC<ProSettingsDrawerProps> = ({
 
         {/* TAB PANELS (Scrollable) */}
         <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col gap-4 pr-0.5">
+          {nativeFilmActive && (
+            <div role="note" data-testid="native-film-notice" className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-[11px] leading-snug text-amber-100">
+              <strong className="font-semibold">Native film camera is on.</strong> Exposure compensation (EV), zoom, flash and front/rear switching control the camera hardware. ISO, shutter, white-balance Kelvin, tint, the colour sliders, scopes and subject detection are not applied in this mode, and focus is continuous auto. Choose &quot;No camera&quot; in Look Studio to use them.
+            </div>
+          )}
           {/* 1. CAMERA TAB */}
           {activeTab === 'camera' && (
             <div className="flex flex-col gap-4">
