@@ -149,6 +149,11 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
   // WebGL 3D LUT Live Shader Pipeline
   const internalLutCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<WebGLLutPipeline | null>(null);
+  // Visible frame (aspect crop + digital zoom) for the film stage; read inside the render loop, so kept in a ref.
+  const frameCfgRef = useRef({ ratio: frameWidthOverHeight(aspectRatio), zoom: digitalScale });
+  useEffect(() => {
+    frameCfgRef.current = { ratio: frameWidthOverHeight(aspectRatio), zoom: digitalScale };
+  });
 
   // Re-render (and re-apply the profile) whenever the user edits a camera profile.
   const profileRevision = useSyncExternalStore(cameraProfileStore.subscribe, cameraProfileStore.getRevision);
@@ -203,6 +208,7 @@ export const Viewfinder: React.FC<ViewfinderProps> = ({
       if (sourceEl && pipelineRef.current && lookState) {
         const vw = (sourceEl as HTMLVideoElement).videoWidth || (sourceEl as HTMLImageElement).naturalWidth || (sourceEl as any).width || 0;
         if (vw > 0) {
+          pipelineRef.current.setFrame(frameCfgRef.current.ratio, frameCfgRef.current.zoom);
           const t0 = performance.now();
           pipelineRef.current.renderFrame(sourceEl, lookState, activeLut, PREVIEW_MAX_SIDE);
           const t1 = performance.now();

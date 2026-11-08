@@ -1420,7 +1420,10 @@ export function App() {
     // fall back to the preview-resolution canvas (the previous behaviour) instead of faking detail.
     const lookStill =
       useLutCanvas && fullRes
-        ? renderLookStill(fullRes, lookState, activeLut, cameraProfileStore.get(lookState.cameraProfileId))
+        ? renderLookStill(fullRes, lookState, activeLut, cameraProfileStore.get(lookState.cameraProfileId), {
+            ratio: frameRatio,
+            zoom: zoomPlan.digitalScale,
+          })
         : null;
     const captureSource = lookStill ? lookStill.canvas : useLutCanvas ? lutCanvasRef.current! : source;
     const skipCss = useLutCanvas;

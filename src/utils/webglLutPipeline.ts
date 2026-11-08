@@ -62,7 +62,8 @@ uniform vec3 u_fLeak;    // amount, hue(0..1), position
 uniform vec2 u_fFlash;   // amount, falloff
 uniform vec2 u_fBorder;  // style (0 none,1 film,2 instant), width
 uniform float u_hasDate;
-uniform vec4 u_dateRect; // x, y, w, h in uv (y=0 is image top)
+uniform vec4 u_dateRect; // x, y, w, h in FRAME uv (y=0 is frame top)
+uniform vec4 u_frame;    // visible frame inside the image: x0, y0, w, h in uv (the crop that is shown and saved)
 uniform vec3 u_dateColor;
 uniform sampler2D u_dateTex;
 
@@ -84,7 +85,8 @@ float toneCh(float x) {
   if (u_fTone.w > 0.0) {
     float knee = 1.0 - 0.6 * u_fTone.w;
     if (y > knee) {
-      float u = (y - knee) / (1.0 - knee);
+      // Over-range values are clipped first: the polynomial is only valid for u <= 1.
+      float u = min(1.0, (y - knee) / (1.0 - knee));
       y = knee + (1.0 - knee) * (u + u_fTone.w * u * u * (1.0 - u));
     }
   }
@@ -148,8 +150,11 @@ vec3 filmColor(vec3 rgb) {
 
 // Finishing stage: vignette, flash, light leak, grain/noise, dust, border, date imprint.
 vec3 filmFinish(vec3 rgb, vec2 uv) {
-  float aspect = u_res.x / u_res.y;
-  vec2 q = (uv - 0.5) * 2.0;
+  // Vignette, flash, leak, border and date belong to the FRAME the user sees and saves, not to the sensor image,
+  // otherwise a 4:3 crop of a 9:16 sensor frame would cut them off.
+  vec2 fuv = (uv - u_frame.xy) / u_frame.zw;
+  float aspect = (u_res.x * u_frame.z) / (u_res.y * u_frame.w);
+  vec2 q = (fuv - 0.5) * 2.0;
   q.x *= 1.0 + (aspect - 1.0) * u_fVig.y;
   float d = length(q) / 1.41421356;
 
@@ -165,8 +170,8 @@ vec3 filmFinish(vec3 rgb, vec2 uv) {
   }
   if (u_fLeak.x > 0.0) {
     vec2 lc = vec2(u_fLeak.z, 0.5);
-    float ld = length((uv - lc) * vec2(1.0, 0.6));
-    float leak = exp(-ld * ld * 9.0) * (0.65 + 0.35 * sin(uv.y * 7.0 + u_fLeak.y * 20.0));
+    float ld = length((fuv - lc) * vec2(1.0, 0.6));
+    float leak = exp(-ld * ld * 9.0) * (0.65 + 0.35 * sin(fuv.y * 7.0 + u_fLeak.y * 20.0));
     vec3 lcol = hue2rgb(u_fLeak.y);
     rgb = 1.0 - (1.0 - rgb) * (1.0 - leak * u_fLeak.x * lcol);
   }
@@ -193,7 +198,7 @@ vec3 filmFinish(vec3 rgb, vec2 uv) {
     rgb = mix(rgb, vec3(0.92), clamp(speck * 0.8 + scratch, 0.0, 1.0));
   }
   if (u_hasDate > 0.5) {
-    vec2 dp = (uv - u_dateRect.xy) / u_dateRect.zw;
+    vec2 dp = (fuv - u_dateRect.xy) / u_dateRect.zw;
     if (dp.x >= 0.0 && dp.x <= 1.0 && dp.y >= 0.0 && dp.y <= 1.0) {
       float a = texture2D(u_dateTex, dp).a;
       rgb = mix(rgb, u_dateColor, a);
@@ -201,9 +206,9 @@ vec3 filmFinish(vec3 rgb, vec2 uv) {
   }
   if (u_fBorder.x > 0.5) {
     float w = u_fBorder.y;
-    float bx = w * u_res.y / u_res.x;
+    float bx = w * (u_res.y * u_frame.w) / (u_res.x * u_frame.z);
     float bottom = u_fBorder.x > 1.5 ? w * 3.0 : w;
-    bool inside = uv.x > bx && uv.x < 1.0 - bx && uv.y > w && uv.y < 1.0 - bottom;
+    bool inside = fuv.x > bx && fuv.x < 1.0 - bx && fuv.y > w && fuv.y < 1.0 - bottom;
     if (!inside) rgb = u_fBorder.x > 1.5 ? vec3(0.96, 0.95, 0.91) : vec3(0.04);
   }
   return rgb;
@@ -296,6 +301,23 @@ void main() {
 }
 `;
 
+/** Visible frame inside an image (uv). Mirrors the crop in captureFrameToDataUrl: centred aspect crop, then 1/zoom. */
+export function frameRect(
+  imageAspect: number,
+  ratio: number | null,
+  zoom: number
+): { x: number; y: number; w: number; h: number } {
+  let w = 1;
+  let h = 1;
+  if (ratio) {
+    if (imageAspect > ratio) w = ratio / imageAspect;
+    else h = imageAspect / ratio;
+  }
+  w /= zoom;
+  h /= zoom;
+  return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+}
+
 export class WebGLLutPipeline {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext | null = null;
@@ -316,6 +338,8 @@ export class WebGLLutPipeline {
   private dateAspect = 1;
   private frameCounter = 0;
   private gpuTimerExt: unknown = null;
+  private frameRatio: number | null = null;
+  private frameZoom = 1;
 
   // Uniform locations
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
@@ -413,7 +437,7 @@ export class WebGLLutPipeline {
       'u_compareSplit',
       'u_film', 'u_res', 'u_seed', 'u_fMat', 'u_fColor', 'u_fTone', 'u_fGrain', 'u_fGrainShadow',
       'u_fHal', 'u_fHalColor', 'u_fBloom', 'u_fVig', 'u_fOptics', 'u_fLeak', 'u_fFlash', 'u_fBorder',
-      'u_hasDate', 'u_dateRect', 'u_dateColor', 'u_dateTex',
+      'u_hasDate', 'u_dateRect', 'u_dateColor', 'u_dateTex', 'u_frame',
     ];
 
     this.uniforms = {};
@@ -552,6 +576,16 @@ export class WebGLLutPipeline {
     this.filmProfile = profile && !isNeutralProfile(profile) ? profile : null;
   }
 
+  /**
+   * Tells the film stage which part of the image is actually shown and saved (aspect crop plus digital zoom), so
+   * border, date imprint, vignette and light leak sit on the visible frame. Same rule as captureFrameToDataUrl.
+   * ratio = frame width / height (null = whole image).
+   */
+  public setFrame(ratio: number | null, zoom: number = 1): void {
+    this.frameRatio = ratio && Number.isFinite(ratio) && ratio > 0 ? ratio : null;
+    this.frameZoom = zoom >= 1 && Number.isFinite(zoom) ? zoom : 1;
+  }
+
   /** Whether the GPU can report real execution time (EXT_disjoint_timer_query). Reported, not used for fake numbers. */
   public get gpuTimerAvailable(): boolean {
     return Boolean(this.gpuTimerExt);
@@ -623,6 +657,8 @@ export class WebGLLutPipeline {
     }
     gl.uniform1f(u.u_film, 1.0);
     gl.uniform2f(u.u_res, width, height);
+    const frame = frameRect(width / height, this.frameRatio, this.frameZoom);
+    gl.uniform4f(u.u_frame, frame.x, frame.y, frame.w, frame.h);
     this.frameCounter = (this.frameCounter + 1) % 24;
     gl.uniform1f(u.u_seed, this.frameCounter * 1.7);
     const m = p.color.matrix; // row-major -> column-major (WebGL1 requires transpose=false)
@@ -648,8 +684,8 @@ export class WebGLLutPipeline {
     if (p.dateImprint.enabled) {
       const rect = this.uploadDateTexture(
         formatDateImprint(new Date(), p.dateImprint.format),
-        width,
-        height,
+        width * frame.w,
+        height * frame.h,
         p.dateImprint.position
       );
       if (rect) {

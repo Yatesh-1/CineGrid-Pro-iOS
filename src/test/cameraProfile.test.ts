@@ -142,3 +142,19 @@ describe('cameraProfile model', () => {
     expect(resetProfile(d)).toBe(d);
   });
 });
+
+describe('tone curve over-range input (regression: yellow blob on CCD Compact)', () => {
+  it('stays bounded and monotonic for inputs above 1 (matrix/glow can exceed white)', () => {
+    for (const p of BUILTIN_PROFILES) {
+      let prev = -1;
+      for (let i = 0; i <= 150; i++) {
+        const y = applyToneCurve(i / 100, p.tone);
+        expect(Number.isFinite(y)).toBe(true);
+        // With a shoulder active the output is capped at white; without one the shader's final clamp applies.
+        expect(y).toBeLessThanOrEqual(p.tone.highlightRolloff > 0 ? 1 + 1e-9 : 1.6);
+        expect(y).toBeGreaterThanOrEqual(prev - 1e-9);
+        prev = y;
+      }
+    }
+  });
+});

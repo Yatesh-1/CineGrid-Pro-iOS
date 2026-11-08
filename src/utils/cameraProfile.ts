@@ -332,7 +332,8 @@ export function applyToneCurve(x: number, t: CameraProfile['tone']): number {
     const knee = 1 - 0.6 * t.highlightRolloff;
     if (y > knee) {
       // C1 at the knee (slope 1) and f(1) = 1, so white stays white; slope at white falls to 1 - rolloff.
-      const u = (y - knee) / (1 - knee);
+      // Values above 1 (matrix / glow can push past white) are clipped first: the polynomial is only valid for u <= 1.
+      const u = Math.min(1, (y - knee) / (1 - knee));
       y = knee + (1 - knee) * (u + t.highlightRolloff * u * u * (1 - u));
     }
   }

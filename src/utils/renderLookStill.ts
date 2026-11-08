@@ -25,6 +25,8 @@ export function renderLookStill(
   look: LookState,
   lut: LutDefinition | null,
   profile: CameraProfile | null,
+  /** The crop that will be saved (frame width/height and digital zoom), so frame-relative effects land on it. */
+  frame: { ratio: number; zoom: number } | null = null,
   maxSide: number = LOOK_STILL_MAX_SIDE
 ): LookStill | null {
   if (typeof document === 'undefined') return null;
@@ -36,6 +38,7 @@ export function renderLookStill(
   }
   try {
     pipeline.setFilmProfile(profile);
+    pipeline.setFrame(frame?.ratio ?? null, frame?.zoom ?? 1);
     // renderFrame falls back to a 2D draw on failure; that cannot grade, so require a real GL pass.
     const ok = pipeline.renderFrame(still, look, lut, maxSide);
     if (!ok || canvas.width === 0 || canvas.height === 0 || !pipeline.filmSupported) {
