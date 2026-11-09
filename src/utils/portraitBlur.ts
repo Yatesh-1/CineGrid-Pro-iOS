@@ -94,8 +94,8 @@ export function focusFromBox(box: { x: number; y: number; w: number; h: number; 
     mask,
     cx: Math.min(0.9, Math.max(0.1, cx)),
     cy: Math.min(0.9, Math.max(0.1, cy)),
-    rx: Math.min(0.85, Math.max(0.28, box.w * 1.15)),
-    ry: Math.min(0.85, Math.max(0.35, box.h * 1.15)),
+    rx: Math.min(0.70, Math.max(0.28, box.w * 0.95)),
+    ry: Math.min(0.75, Math.max(0.35, box.h * 0.95)),
   };
 }
 
