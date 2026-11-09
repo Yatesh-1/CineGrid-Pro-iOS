@@ -12,6 +12,7 @@ interface ColorPanelProps {
   colorGrading: ColorGradingSettings;
   onChangeColorGrading: (cg: ColorGradingSettings) => void;
   onResetColor: () => void;
+  onAiAutoGrade?: () => void;
 }
 
 export const ColorPanel: React.FC<ColorPanelProps> = ({
@@ -22,6 +23,7 @@ export const ColorPanel: React.FC<ColorPanelProps> = ({
   colorGrading,
   onChangeColorGrading,
   onResetColor,
+  onAiAutoGrade,
 }) => {
   const [isColorMixActive, setIsColorMixActive] = useState(false);
   const [showGrading, setShowGrading] = useState(false);
@@ -69,6 +71,17 @@ export const ColorPanel: React.FC<ColorPanelProps> = ({
           >
             Color Grading
           </button>
+
+          {onAiAutoGrade && (
+            <button
+              type="button"
+              onClick={onAiAutoGrade}
+              className="px-2.5 py-1 rounded-full text-xs font-medium border border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20 active:scale-95 transition-all flex items-center gap-1 shadow-sm"
+              title="Automatic scene-aware AI color grading"
+            >
+              <span>AI Auto</span>
+            </button>
+          )}
         </div>
 
         <button

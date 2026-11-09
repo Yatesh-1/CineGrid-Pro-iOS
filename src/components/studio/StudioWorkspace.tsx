@@ -11,6 +11,7 @@ import type {
   StudioPreset,
 } from '../../types/studio';
 import { StudioEngine, DEFAULT_STUDIO_STATE } from '../../utils/studioEngine';
+import { analyzeAndGenerateAiGrade } from '../../utils/aiColorGrading';
 import { StudioTopBar } from './StudioTopBar';
 import { StudioSidebar } from './StudioSidebar';
 import { cameraAudio } from '../../utils/audio';
@@ -219,6 +220,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       const nextIdx = historyIndex + 1;
       setHistoryIndex(nextIdx);
       setState(history[nextIdx]);
+    }
+  };
+
+  const handleAiAutoGrade = () => {
+    if (!editedCanvasRef.current) return;
+    const res = analyzeAndGenerateAiGrade(editedCanvasRef.current, 1.0);
+    if (res?.suggestedState) {
+      cameraAudio.playFocusLock();
+      handleChangeState(res.suggestedState);
     }
   };
 
@@ -732,6 +742,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           isCropEditing={isCropEditing}
           onToggleCropEditing={handleToggleCropEditing}
           onAutoTone={handleAutoTone}
+          onAiAutoGrade={handleAiAutoGrade}
           onResetAll={handleResetAll}
         />
       </div>

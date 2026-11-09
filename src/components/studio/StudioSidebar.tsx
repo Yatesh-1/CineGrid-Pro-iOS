@@ -60,6 +60,7 @@ interface StudioSidebarProps {
   isCropEditing: boolean;
   onToggleCropEditing: () => void;
   onAutoTone?: () => void;
+  onAiAutoGrade?: () => void;
   onResetAll?: () => void;
 }
 
@@ -88,6 +89,7 @@ export const StudioSidebar: React.FC<StudioSidebarProps> = ({
   isCropEditing,
   onToggleCropEditing,
   onAutoTone,
+  onAiAutoGrade,
   onResetAll,
 }) => {
   const primaryTools: { id: StudioTab; label: string; icon: React.ReactNode }[] = [
@@ -126,6 +128,7 @@ export const StudioSidebar: React.FC<StudioSidebarProps> = ({
               onChangeState({ colorGrading })
             }
             onResetColor={onResetColor}
+            onAiAutoGrade={onAiAutoGrade}
           />
         )}
 
