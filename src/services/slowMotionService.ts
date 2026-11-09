@@ -114,7 +114,7 @@ export class SlowMotionService {
     if (typeof MediaRecorder === 'undefined' || !stream) return false;
 
     this.recordedChunks = [];
-    let mimeType = 'video/webm;codecs=vp9';
+    let mimeType = 'video/mp4;codecs=avc1';
     if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1,mp4a.40.2')) {
       mimeType = 'video/mp4;codecs=avc1,mp4a.40.2'; // AAC sound plays everywhere
     } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')) {

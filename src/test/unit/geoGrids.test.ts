@@ -15,6 +15,8 @@ const coords = (p: Prim): number[] => {
       return [p.x, p.y, p.w, p.h];
     case 'dot':
       return [p.x, p.y];
+    case 'txt':
+      return [p.x, p.y, p.size ?? 0];
     case 'p':
       return p.pts.flat();
   }

@@ -13,6 +13,8 @@ export type Prim =
   | { t: 'r'; x: number; y: number; w: number; h: number; k?: StrokeKind }
   /** Shades everything outside the rectangle (crop / safe-area guides). */
   | { t: 'dim'; x: number; y: number; w: number; h: number }
+  /** Handwritten-style caption. x,y = text centre (frame fractions); size = font height as a fraction of frame height. */
+  | { t: 'txt'; x: number; y: number; text: string; size?: number; rot?: number }
   /** Node marker, drawn only when "intersection nodes" is on. */
   | { t: 'dot'; x: number; y: number };
 

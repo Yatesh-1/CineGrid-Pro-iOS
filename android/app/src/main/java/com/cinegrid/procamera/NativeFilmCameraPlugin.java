@@ -5,6 +5,10 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.SurfaceTexture;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -152,6 +156,117 @@ public class NativeFilmCameraPlugin extends Plugin {
         });
     }
 
+    /**
+     * probeCapabilities() -> what this phone really offers for pro video / RAW. Read from Camera2 and MediaCodec, nothing assumed.
+     * Used to decide what the app may advertise (10-bit, HDR, LOG, HEVC, RAW, high frame rates).
+     */
+    @PluginMethod
+    public void probeCapabilities(PluginCall call) {
+        try {
+            JSObject out = new JSObject();
+            out.put("androidSdk", Build.VERSION.SDK_INT);
+            out.put("device", Build.MANUFACTURER + " " + Build.MODEL);
+            // Encoders: which profiles/colour formats the hardware accepts
+            JSArray encoders = new JSArray();
+            for (android.media.MediaCodecInfo info : new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).getCodecInfos()) {
+                if (!info.isEncoder()) continue;
+                for (String type : info.getSupportedTypes()) {
+                    if (!type.equals("video/avc") && !type.equals("video/hevc") && !type.equals("video/av01")) continue;
+                    JSObject e = new JSObject();
+                    e.put("name", info.getName());
+                    e.put("type", type);
+                    e.put("hardware", Build.VERSION.SDK_INT >= 29 ? info.isHardwareAccelerated() : !info.getName().startsWith("OMX.google") && !info.getName().startsWith("c2.android"));
+                    android.media.MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(type);
+                    JSArray profiles = new JSArray();
+                    for (android.media.MediaCodecInfo.CodecProfileLevel pl : caps.profileLevels) profiles.put(pl.profile);
+                    e.put("profiles", profiles);
+                    boolean ten = false;
+                    for (android.media.MediaCodecInfo.CodecProfileLevel pl : caps.profileLevels) {
+                        if (type.equals("video/hevc") && (pl.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 || pl.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10)) ten = true;
+                        if (type.equals("video/avc") && pl.profile == android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileHigh10) ten = true;
+                    }
+                    e.put("tenBitProfile", ten);
+                    android.media.MediaCodecInfo.VideoCapabilities vc = caps.getVideoCapabilities();
+                    if (vc != null) {
+                        e.put("maxSize", vc.getSupportedWidths().getUpper() + "x" + vc.getSupportedHeights().getUpper());
+                        e.put("fps1080p", vc.isSizeSupported(1920, 1080) ? vc.getSupportedFrameRatesFor(1920, 1080).getUpper() : 0);
+                    }
+                    encoders.put(e);
+                }
+            }
+            out.put("videoEncoders", encoders);
+
+            // Cameras
+            CameraManager cm = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+            JSArray cams = new JSArray();
+            for (String id : cm.getCameraIdList()) {
+                CameraCharacteristics cc = cm.getCameraCharacteristics(id);
+                JSObject c = new JSObject();
+                c.put("id", id);
+                Integer facing = cc.get(CameraCharacteristics.LENS_FACING);
+                c.put("facing", facing == null ? "?" : facing == CameraCharacteristics.LENS_FACING_FRONT ? "front" : facing == CameraCharacteristics.LENS_FACING_BACK ? "back" : "external");
+                Integer level = cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+                c.put("hardwareLevel", level == null ? -1 : level); // 0 limited, 1 full, 2 legacy, 3 level_3
+                JSArray capabilities = new JSArray();
+                int[] caps = cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+                if (caps != null) for (int cap : caps) capabilities.put(cap); // 2 MANUAL_SENSOR, 3 MANUAL_POST_PROCESSING, 3.. RAW=3? see names below
+                c.put("capabilityCodes", capabilities);
+                boolean raw = false, manualSensor = false, manualPost = false, burst = false, logicalMulti = false, highSpeed = false;
+                if (caps != null) for (int cap : caps) {
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) raw = true;
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) manualSensor = true;
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING) manualPost = true;
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE) burst = true;
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) logicalMulti = true;
+                    if (cap == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) highSpeed = true;
+                }
+                c.put("rawCapture", raw);
+                c.put("manualSensor", manualSensor); // real manual ISO / shutter
+                c.put("manualPostProcessing", manualPost); // gains / transform for manual white balance
+                c.put("burst", burst);
+                c.put("logicalMultiCamera", logicalMulti);
+                c.put("constrainedHighSpeed", highSpeed);
+                StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                if (map != null) {
+                    int[] fmts = map.getOutputFormats();
+                    JSArray formats = new JSArray();
+                    boolean p010 = false, rawSensor = false, rawPrivate = false;
+                    for (int f : fmts) {
+                        formats.put(f);
+                        if (Build.VERSION.SDK_INT >= 31 && f == ImageFormat.YCBCR_P010) p010 = true;
+                        if (f == ImageFormat.RAW_SENSOR) rawSensor = true;
+                        if (f == ImageFormat.RAW_PRIVATE) rawPrivate = true;
+                    }
+                    c.put("outputFormatCodes", formats);
+                    c.put("p010Output", p010); // a 10-bit capture stream
+                    c.put("rawSensorOutput", rawSensor);
+                    c.put("rawPrivateOutput", rawPrivate);
+                    Size[] rs = map.getOutputSizes(ImageFormat.RAW_SENSOR);
+                    if (rs != null && rs.length > 0) {
+                        Size big = rs[0];
+                        for (Size s : rs) if ((long) s.getWidth() * s.getHeight() > (long) big.getWidth() * big.getHeight()) big = s;
+                        c.put("rawSensorMaxSize", big.getWidth() + "x" + big.getHeight());
+                    }
+                }
+                Range<Integer>[] ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+                c.put("aeFpsRanges", ranges == null ? "" : java.util.Arrays.toString(ranges));
+                int[] tonemap = cc.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES);
+                c.put("tonemapModes", tonemap == null ? "" : java.util.Arrays.toString(tonemap)); // 3 = PRESET_CURVE / gamma / HLG would show as 3..5
+                Range<Integer> isoR = cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+                if (isoR != null) c.put("isoRange", isoR.getLower() + "-" + isoR.getUpper());
+                Range<Long> expR = cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+                if (expR != null) c.put("shutterRangeNs", expR.getLower() + "-" + expR.getUpper());
+                Float minFocus = cc.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+                c.put("minFocusDistanceDiopters", minFocus == null ? 0 : minFocus);
+                cams.put(c);
+            }
+            out.put("cameras", cams);
+            out.put("note", "dynamic-range / HLG / 10-bit capture streams need Android 13 (DynamicRangeProfiles) or P010 output on Android 12; shown above as p010Output");
+            call.resolve(out);
+        } catch (Exception e) {
+            call.reject("Capability probe failed: " + e.getMessage());
+        }
+    }
     @PluginMethod
     public void takePhoto(PluginCall call) {
         if (session == null) { call.reject("Native film camera is not running."); return; }
@@ -456,11 +571,56 @@ public class NativeFilmCameraPlugin extends Plugin {
             surfH = h;
         }
 
+        // ---- Hold-steady (anti-shake) ----------------------------------------------------------------------
+        /** Angular speed (rad/s) above which the phone counts as shaking. Normal hand-hold sits well below this. */
+        private static final float SHAKE_RAD_S = 0.25f;
+        /** Longest the shutter waits for the phone to settle; past this the photo is taken anyway. */
+        private static final long SHAKE_MAX_WAIT_MS = 350;
+        private SensorManager sensorMgr;
+        private volatile float gyroMag = 0f;
+        private final SensorEventListener gyroListener = new SensorEventListener() {
+            @Override public void onSensorChanged(SensorEvent e) {
+                gyroMag = (float) Math.sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]);
+            }
+            @Override public void onAccuracyChanged(Sensor sensor, int accuracy) { }
+        };
+
+        private static boolean hasMode(int[] modes, int mode) {
+            if (modes == null) return false;
+            for (int m : modes) if (m == mode) return true;
+            return false;
+        }
+
+        /** Optical stabilisation (lens shift) whenever the phone has it; it does not change the field of view. */
+        private void applyStabilisation(CaptureRequest.Builder b) {
+            if (characteristics == null) return;
+            int[] ois = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION);
+            if (hasMode(ois, CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
+                b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON);
+            }
+        }
+
+        /** Stills only: the slower, higher quality noise-reduction and sharpening paths. */
+        private void applyStillQuality(CaptureRequest.Builder b) {
+            if (characteristics == null) return;
+            if (hasMode(characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES), CameraCharacteristics.NOISE_REDUCTION_MODE_HIGH_QUALITY)) {
+                b.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraCharacteristics.NOISE_REDUCTION_MODE_HIGH_QUALITY);
+            }
+            if (hasMode(characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES), CameraCharacteristics.EDGE_MODE_HIGH_QUALITY)) {
+                b.set(CaptureRequest.EDGE_MODE, CameraCharacteristics.EDGE_MODE_HIGH_QUALITY);
+            }
+        }
+
         void start() {
             glThread.start();
             camThread.start();
             glHandler = new Handler(glThread.getLooper());
             camHandler = new Handler(camThread.getLooper());
+            try {
+                sensorMgr = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+                Sensor gyro = sensorMgr == null ? null : sensorMgr.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+                if (gyro != null) sensorMgr.registerListener(gyroListener, gyro, SensorManager.SENSOR_DELAY_GAME, camHandler);
+            } catch (Throwable ignored) { /* no gyroscope: the shutter simply never waits */ }
             glHandler.post(() -> {
                 try {
                     initGl();
@@ -473,6 +633,7 @@ public class NativeFilmCameraPlugin extends Plugin {
 
         void stop() {
             running = false;
+            try { if (sensorMgr != null) sensorMgr.unregisterListener(gyroListener); } catch (Throwable ignored) { }
             if (recording && recorder != null) {
                 recording = false;
                 final NativeFilmRecorder dying = recorder;
@@ -717,6 +878,7 @@ public class NativeFilmCameraPlugin extends Plugin {
                                         previewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
                                         previewBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
                                         if (fps != null) previewBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps);
+                                        applyStabilisation(previewBuilder);
                                         s.setRepeatingRequest(previewBuilder.build(), null, camHandler);
                                         state = "active";
                                         PluginCall c = startCall;
@@ -847,6 +1009,20 @@ public class NativeFilmCameraPlugin extends Plugin {
 
         /** orientation: JPEG EXIF rotation in degrees (0/90/180/270); -1 = the camera's default for a portrait phone. */
         void takePhoto(PluginCall call, int orientationOverride) {
+            final long t0 = android.os.SystemClock.uptimeMillis();
+            camHandler.post(() -> steadyThenShoot(call, orientationOverride, t0));
+        }
+
+        /** Holds the shutter (at most SHAKE_MAX_WAIT_MS) until the gyroscope says the phone has stopped shaking. */
+        private void steadyThenShoot(PluginCall call, int orientationOverride, long t0) {
+            if (running && gyroMag > SHAKE_RAD_S && android.os.SystemClock.uptimeMillis() - t0 < SHAKE_MAX_WAIT_MS) {
+                camHandler.postDelayed(() -> steadyThenShoot(call, orientationOverride, t0), 25);
+                return;
+            }
+            takePhotoNow(call, orientationOverride);
+        }
+
+        private void takePhotoNow(PluginCall call, int orientationOverride) {
             camHandler.post(() -> {
                 if (camera == null || capture == null || jpegReader == null) {
                     call.reject("The camera is not ready.");
@@ -873,6 +1049,8 @@ public class NativeFilmCameraPlugin extends Plugin {
                     }
                     if (torchOn) b.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
                     b.set(CaptureRequest.JPEG_QUALITY, (byte) 95);
+                    applyStabilisation(b);
+                    applyStillQuality(b);
                     // Portrait phone: the EXIF orientation that makes the saved still upright.
                     b.set(CaptureRequest.JPEG_ORIENTATION, orientationOverride >= 0 ? orientationOverride % 360 : jpegOrientation());
                     capture.capture(b.build(), new CameraCaptureSession.CaptureCallback() {

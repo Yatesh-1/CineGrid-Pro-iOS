@@ -3,6 +3,9 @@ import type { GeoCategoryId, GeoGridDefinition, GeoParams, GridAlias } from '../
 import { SECTION1, SECTION1_ALIASES, SECTION2, SECTION2_ALIASES, SECTION3, SECTION3_ALIASES } from './sections1to3';
 import { ASPECT_ALIASES, ASPECT_GUIDES } from './aspectGuides';
 import { SECTION14, SECTION14_ALIASES } from './section14';
+import { SECTION15 } from './section15';
+import { SECTION16 } from './section16';
+import { SECTION17 } from './section17';
 import { SECTION4, SECTION4_ALIASES, SECTION5, SECTION5_ALIASES, SECTION6, SECTION6_ALIASES } from './sections4to6';
 import {
   SECTION7,
@@ -31,6 +34,9 @@ export const GEO_GRIDS: GeoGridDefinition[] = [
   ...SECTION12,
   ...ASPECT_GUIDES,
   ...SECTION14,
+  ...SECTION15,
+  ...SECTION16,
+  ...SECTION17,
 ];
 
 /** Names in the brief that map to overlays which already existed before the geometry engine. */

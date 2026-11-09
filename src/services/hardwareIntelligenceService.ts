@@ -78,7 +78,7 @@ export class HardwareIntelligenceService {
     const isMobile = isIOS || isAndroid;
 
     // Check if Capacitor native bridge is present
-    const hasCapacitor = typeof (window as unknown as { Capacitor?: unknown }).Capacitor !== 'undefined';
+    const hasCapacitor = typeof (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor !== 'undefined' && !!(window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.();
 
     if (isIOS) {
       return {

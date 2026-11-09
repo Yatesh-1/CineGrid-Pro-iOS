@@ -19,7 +19,7 @@ import {
 
 const USER_KEY = 'cinegrid_camera_profiles_v1';
 const OVERRIDE_KEY = 'cinegrid_camera_profile_overrides_v1';
-/** Last selected camera. Deliberately NOT in resetOnLaunch's FEATURE_STATE_KEYS, so it survives restarts. */
+/** Last selected camera. Kept while the app is open; resetOnLaunch clears it when the app is closed and reopened. */
 const ACTIVE_KEY = 'cinegrid_active_camera_v1';
 const MAX_USER_PROFILES = 100;
 

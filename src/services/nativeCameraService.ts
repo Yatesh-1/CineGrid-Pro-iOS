@@ -90,7 +90,7 @@ interface NativeCameraPluginApi {
 const NativeCamera = registerPlugin<NativeCameraPluginApi>('NativeCamera');
 
 export const isNativeCameraPlatform = (): boolean =>
-  Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+  Capacitor.isNativePlatform() && (Capacitor.getPlatform() === 'android' || Capacitor.getPlatform() === 'ios');
 
 /** What this device can really do for the selected camera. */
 export interface StillSupport {

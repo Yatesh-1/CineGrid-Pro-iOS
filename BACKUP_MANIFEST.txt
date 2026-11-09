@@ -1,0 +1,26 @@
+﻿CineGrid Pro full backup
+Date: 2026-11-09
+Source: C:\Users\yates\Desktop\CineGrid-Pro - Copy
+Git branch: master
+Git HEAD: 15ee7f0 Diagnostics panel (native stats, export), native-mode notice in Pro drawer, report; 808 tests
+Uncommitted changes at backup time:
+ M android/app/src/main/java/com/cinegrid/procamera/NativeFilmCameraPlugin.java
+ M src/components/grid-engine/GeoGridOverlay.tsx
+ M src/data/geoGridPhotos.json
+ M src/data/geoGrids/index.ts
+ M src/services/cameraProfileStore.ts
+ M src/test/cameraProfileStore.test.ts
+ M src/test/unit/geoGrids.test.ts
+ M src/test/unit/resetOnLaunch.test.ts
+ M src/types/gridGeometry.ts
+ M src/utils/gridGeometry/kit.ts
+ M src/utils/resetOnLaunch.ts
+?? src/data/geoGrids/section15.ts
+?? src/data/geoGrids/section16.ts
+?? src/data/geoGrids/section17.ts
+
+Excluded (rebuildable): node_modules, dist, backups, android/build, android/app/build, android/.gradle
+Included: src, android (native code), ios, server, docs, public, scripts, configs, .git history, APKs
+
+Restore: copy folder anywhere, run npm install, npm run build, npx cap sync android, then build in Android Studio.
+

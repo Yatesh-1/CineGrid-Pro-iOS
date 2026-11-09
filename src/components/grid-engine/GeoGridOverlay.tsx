@@ -70,6 +70,25 @@ export const GeoGridSvg: React.FC<SvgProps> = ({ prims, width, height, style, pl
                   d={`M-2 -2H3V3H-2Z M${p.x} ${p.y}h${p.w}v${p.h}h${-p.w}Z`}
                 />
               );
+            case 'txt': {
+              // Drawn outside the stretched unit space so glyphs are never distorted.
+              const fs = (p.size ?? 0.03) * height;
+              return (
+                <text
+                  key={i}
+                  x={p.x * width}
+                  y={p.y * height}
+                  fontSize={fs}
+                  fill={color}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  transform={`scale(${1 / width} ${1 / height}) rotate(${p.rot ?? 0} ${p.x * width} ${p.y * height})`}
+                  style={{ fontFamily: '"Segoe Print","Bradley Hand","Comic Sans MS","Chalkboard SE",cursive', fontWeight: 600, paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.55)', strokeWidth: 2.5 }}
+                >
+                  {p.text}
+                </text>
+              );
+            }
             case 'dot':
               return nodes ? (
                 <ellipse key={i} cx={p.x} cy={p.y} rx={4 / width} ry={4 / height} fill={color} />

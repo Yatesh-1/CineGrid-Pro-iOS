@@ -18,7 +18,7 @@ const pathFor = (id: string, v: PhotoVariant) => `photos/${id}_${v}.jpg`;
 
 export function isFileBacked(url: string | undefined): boolean {
   // only the photo variants this service wrote (recordings live in files/recordings and are not photos)
-  return !!url && url.includes('/_capacitor_file_/') && url.includes('/files/photos/');
+  return !!url && url.includes('/_capacitor_file_/') && (url.includes('/files/photos/') || url.includes('/photos/'));
 }
 
 async function toBase64(blob: Blob): Promise<string> {

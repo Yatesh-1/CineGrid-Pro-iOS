@@ -23,6 +23,7 @@ export const R = (x: number, y: number, w: number, h: number, k?: StrokeKind): P
 });
 export const P = (pts: Pt[], closed = false, k?: StrokeKind): Prim => ({ t: 'p', pts, closed, k });
 export const DOT = (x: number, y: number): Prim => ({ t: 'dot', x, y });
+export const TXT = (x: number, y: number, text: string, size = 0.03, rot = 0): Prim => ({ t: 'txt', x, y, text, size, rot });
 export const DIM = (x: number, y: number, w: number, h: number): Prim => ({ t: 'dim', x, y, w, h });
 
 export const vlines = (xs: number[], k?: StrokeKind): Prim[] => xs.map((x) => L(x, 0, x, 1, k));

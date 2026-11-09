@@ -101,7 +101,7 @@ interface NativeFilmPluginApi {
 const Plugin = registerPlugin<NativeFilmPluginApi>('NativeFilmCamera');
 
 /** True only inside the Android app, where the plugin exists. Never true in a browser or on iOS. */
-export const isNativeFilmSupported = (): boolean => Capacitor.getPlatform() === 'android';
+export const isNativeFilmSupported = (): boolean => Capacitor.isNativePlatform() && (Capacitor.getPlatform() === 'android' || Capacitor.getPlatform() === 'ios');
 
 export const nativeFilm = {
   start: (o: NativeFilmStartOptions) => Plugin.start(o),

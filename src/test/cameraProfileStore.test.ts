@@ -74,15 +74,17 @@ describe('cameraProfileStore', () => {
 });
 
 describe('active camera persistence', () => {
-  it('remembers the selection across a simulated relaunch and survives the launch reset', async () => {
+  it('remembers the selection while the app stays open, and a fresh start resets it to No camera', async () => {
     const id = BUILTIN_PROFILES[0].id;
     store.setActiveId(id);
     store._reloadForTests();
     expect(store.getActiveId()).toBe(id);
-    // resetOnLaunch clears look state but must not touch the remembered camera
+    // reset-on-close clears the selected camera but must not touch the camera profiles themselves
     const { resetFeatureState } = await import('../utils/resetOnLaunch');
     resetFeatureState();
-    expect(store.getActiveId()).toBe(id);
+    store._reloadForTests();
+    expect(store.getActiveId()).toBeNull();
+    expect(store.list().length).toBeGreaterThanOrEqual(BUILTIN_PROFILES.length);
   });
 
   it('persists a custom camera and its settings, and null means an explicit No camera', () => {
