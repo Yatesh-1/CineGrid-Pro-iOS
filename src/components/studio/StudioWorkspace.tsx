@@ -20,7 +20,7 @@ import { blendStates } from '../../utils/studioBlend';
 import { ratioValue, FULL_CROP, type CropRect } from '../../utils/cropMath';
 
 /** Edits run on a downscaled copy while dragging sliders; export always uses the full-resolution source. */
-const PREVIEW_MAX_EDGE = 1600;
+const PREVIEW_MAX_EDGE = 1024;
 
 function makePreviewSource(img: HTMLImageElement): CanvasImageSource {
   const longEdge = Math.max(img.naturalWidth, img.naturalHeight);

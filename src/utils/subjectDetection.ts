@@ -107,7 +107,7 @@ export function detectSalientSubject(rgba: Uint8ClampedArray, width: number, hei
       }
     }
   }
-  if (maxK < 0 || max < 6) return null; // a flat, featureless frame has no subject
+  if (maxK < 0 || max < 10) return null; // a flat, featureless frame has no subject
 
   // 4. grow the region around the peak (cells above half the peak, connected to it)
   const threshold = max * 0.5;

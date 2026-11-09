@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 import react from '@vitejs/plugin-react';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { handleLicenseApiRequest } from './server/licenseApi.js';
@@ -37,7 +38,7 @@ function licenseApiPlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), licenseApiPlugin()],
+  plugins: [react(), basicSsl(), licenseApiPlugin()],
   server: {
     port: 8080,
     host: true,

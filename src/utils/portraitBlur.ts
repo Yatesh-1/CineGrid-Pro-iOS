@@ -94,8 +94,8 @@ export function focusFromBox(box: { x: number; y: number; w: number; h: number; 
     mask,
     cx: Math.min(0.9, Math.max(0.1, cx)),
     cy: Math.min(0.9, Math.max(0.1, cy)),
-    rx: Math.min(0.7, Math.max(0.22, box.w * 0.85)),
-    ry: Math.min(0.75, Math.max(0.28, box.h * 0.85)),
+    rx: Math.min(0.85, Math.max(0.28, box.w * 1.15)),
+    ry: Math.min(0.85, Math.max(0.35, box.h * 1.15)),
   };
 }
 
@@ -110,7 +110,7 @@ export function portraitMaskCss(focus?: PortraitFocus | null): string {
     }
     return `url(${url})`;
   }
-  return `radial-gradient(ellipse ${(focus.rx * 100).toFixed(1)}% ${(focus.ry * 100).toFixed(1)}% at ${(focus.cx * 100).toFixed(1)}% ${(focus.cy * 100).toFixed(1)}%, transparent 72%, black 118%)`;
+  return `radial-gradient(ellipse ${(focus.rx * 100).toFixed(1)}% ${(focus.ry * 100).toFixed(1)}% at ${(focus.cx * 100).toFixed(1)}% ${(focus.cy * 100).toFixed(1)}%, transparent 95%, black 160%)`;
 }
 
 /**
@@ -142,7 +142,7 @@ export function applyPortraitBlur(canvas: HTMLCanvasElement, strength: number, f
     bctx.save();
     bctx.translate(focus.cx * canvas.width, focus.cy * canvas.height);
     bctx.scale(focus.rx * canvas.width, focus.ry * canvas.height);
-    const grad = bctx.createRadialGradient(0, 0, 0.72, 0, 0, 1.18);
+    const grad = bctx.createRadialGradient(0, 0, 0.95, 0, 0, 1.60);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, 'rgba(0,0,0,1)');
     bctx.fillStyle = grad;
