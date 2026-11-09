@@ -1,6 +1,9 @@
 name: Build iOS IPA (CineGrid Pro)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       build_configuration:
